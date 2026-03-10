@@ -66,9 +66,19 @@ Start-Process -FilePath "cmd.exe" -ArgumentList '/c','set ASPNETCORE_ENVIRONMENT
 
 ## What Is Implemented
 
+### Latest update branch
+- branch: `feature/climate-room-type-overrides`
+- climate page now resolves the same AC device/name/room as `Rooms`
+- climate control panel in `Rooms` matches the dedicated `/climate` control layout
+- each device can now have a manual SmartPanel-only type override from `Rooms`
+- climate button highlight logic is aligned with device state:
+  - when on: `Power On` and the active mode are highlighted
+  - when off: only `Power Off` is highlighted
+
 ### Backend and data model
 - normalized Home Assistant snapshot storage in `ha_entity_snapshots`
 - room binding storage in `device_room_bindings`
+- device type override storage in `device_type_overrides`
 - legacy room assignment migration during bootstrap
 - local SQLite bootstrap without manual migration step
 - admin bootstrap user and JWT auth configuration
@@ -86,6 +96,8 @@ Start-Process -FilePath "cmd.exe" -ArgumentList '/c','set ASPNETCORE_ENVIRONMENT
 - `Logs` tab for motion sensors
 - motion detection from history with live fallback
 - `RUH ZARAZ` state banner in UI
+- manual device type override in `Rooms -> Details`
+- climate device details in `Rooms` use the same control style as `/climate`
 - endpoint: `GET /api/sensors/motion/debug`
 
 ### Cameras
@@ -97,6 +109,7 @@ Start-Process -FilePath "cmd.exe" -ArgumentList '/c','set ASPNETCORE_ENVIRONMENT
 - scenes page and activation
 - TV list and control API
 - climate control from sensor details
+- dedicated climate page uses the same device grouping/display metadata as `Rooms`
 
 ## Main Endpoints
 
@@ -113,6 +126,7 @@ Start-Process -FilePath "cmd.exe" -ArgumentList '/c','set ASPNETCORE_ENVIRONMENT
 
 ### Control
 - `POST /api/sensors/climate/control`
+- `POST /api/rooms/device-type`
 - `POST /api/tvs/control`
 - `POST /api/cameras/control`
 - `POST /api/scenes/{sceneName}/activate`
