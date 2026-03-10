@@ -64,6 +64,17 @@ Start-Process -FilePath "cmd.exe" -ArgumentList '/c','set ASPNETCORE_ENVIRONMENT
 Start-Process -FilePath "cmd.exe" -ArgumentList '/c','set ASPNETCORE_ENVIRONMENT=Development&& set ASPNETCORE_URLS=http://localhost:5037&& dotnet bin/Debug/net8.0/SmartPanel.Web.dll' -WorkingDirectory "C:\Projects\SmartPanel\SmartPanel.Web"
 ```
 
+### 8. One-command start script
+From the repo root:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-smartpanel.ps1
+```
+
+Optional fast restart without build:
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-smartpanel.ps1 -NoBuild
+```
+
 ## What Is Implemented
 
 ### Latest update branch
