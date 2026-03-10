@@ -1,0 +1,198 @@
+@page "/touch"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+@inject NavigationManager Navigation
+
+<PageTitle>Touch Rooms</PageTitle>
+
+<section class="page-shell pi-room-browser">
+    <header class="pi-browser-header">
+        <div>
+            <div class="pi-kicker">Pi Touch View</div>
+            <h1>Rooms</h1>
+            <p class="page-subtitle pi-browser-subtitle">All rooms stay on one screen. Tap a room to open a dedicated detail view.</p>
+        </div>
+
+        <div class="pi-browser-actions">
+            <span class="sensor-updated">Updated @lastLoadedAt.ToString("HH:mm")</span>
+            <a class="scene-btn pi-link-btn" href="/">Dashboard</a>
+            <button type="button" class="scene-btn" disabled="@isLoading" @onclick="ReloadAsync">Refresh</button>
+        </div>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(loadError))
+    {
+        <div class="status-banner">@loadError</div>
+    }
+
+    @if (isLoading && rooms.Count == 0)
+    {
+        <div class="card">Loading rooms...</div>
+    }
+    else if (rooms.Count == 0)
+    {
+        <div class="card">No rooms available.</div>
+    }
+    else
+    {
+        <div class="pi-room-grid">
+            @foreach (var room in RoomCards)
+            {
+                <button type="button" class="pi-room-tile" @onclick="() => OpenRoom(room.Name)">
+                    <div class="pi-room-tile-head">
+                        <span class="pi-room-label">@room.SensorSummary</span>
+                        @if (room.AttentionCount > 0)
+                        {
+                            <span class="pi-room-attention">@room.AttentionCount attention</span>
+                        }
+                    </div>
+
+                    <strong class="pi-room-name">@room.Name</strong>
+                    <div class="pi-room-reading">@room.TemperatureLabel</div>
+
+                    <div class="pi-room-meta">
+                        <span>@room.OnlineCount/@room.SensorCount online</span>
+                        <span>@room.PrimaryState</span>
+                    </div>
+                </button>
+            }
+        </div>
+
+        <div class="pi-browser-footer">
+            <div class="card pi-browser-stat">
+                <span class="stat-label">Rooms</span>
+                <strong class="stat-value">@rooms.Count</strong>
+            </div>
+            <div class="card pi-browser-stat">
+                <span class="stat-label">Devices Online</span>
+                <strong class="stat-value">@TotalOnlineSensors / @TotalSensors</strong>
+            </div>
+            <div class="card pi-browser-stat">
+                <span class="stat-label">Attention</span>
+                <strong class="stat-value">@RoomCards.Sum(x => x.AttentionCount)</strong>
+            </div>
+        </div>
+    }
+</section>
+
+@code {
+    private readonly List<RoomDto> rooms = [];
+    private bool isLoading = true;
+    private string? loadError;
+    private DateTime lastLoadedAt = DateTime.Now;
+
+    private int TotalSensors => rooms.Sum(room => room.Sensors.Count);
+    private int TotalOnlineSensors => rooms.Sum(room => room.Sensors.Count(sensor => sensor.Online));
+
+    private IEnumerable<RoomCardModel> RoomCards => rooms.Select(room => new RoomCardModel(
+            room.Name,
+            room.Sensors.Count,
+            room.Sensors.Count(sensor => sensor.Online),
+            GetRoomTemperatureLabel(room),
+            GetRoomPrimaryState(room),
+            GetRoomAttentionCount(room),
+            GetSensorSummary(room)))
+        .OrderBy(room => room.Name, StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        isLoading = true;
+        loadError = null;
+
+        try
+        {
+            rooms.Clear();
+            rooms.AddRange(await ApiClient.GetRoomsAsync());
+            lastLoadedAt = DateTime.Now;
+        }
+        catch (Exception ex)
+        {
+            loadError = $"Room load failed: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void OpenRoom(string roomName)
+    {
+        Navigation.NavigateTo($"/touch/{Uri.EscapeDataString(roomName)}");
+    }
+
+    private static string GetRoomTemperatureLabel(RoomDto room)
+    {
+        var values = room.Sensors
+            .Where(sensor =>
+                sensor.Value.HasValue &&
+                (sensor.Type.Equals("temp", StringComparison.OrdinalIgnoreCase) ||
+                 sensor.Type.Equals("environment", StringComparison.OrdinalIgnoreCase)) &&
+                (sensor.Unit.Contains("C", StringComparison.OrdinalIgnoreCase) ||
+                 sensor.Unit.Contains("°", StringComparison.OrdinalIgnoreCase)))
+            .Select(sensor => sensor.Value!.Value)
+            .ToList();
+
+        return values.Count == 0 ? "N/A" : $"{values.Average():0.#} C";
+    }
+
+    private static string GetSensorSummary(RoomDto room)
+    {
+        var climateCount = room.Sensors.Count(sensor => sensor.Type.Equals("climate", StringComparison.OrdinalIgnoreCase));
+        var mediaCount = room.Sensors.Count(sensor => sensor.Type.Equals("media", StringComparison.OrdinalIgnoreCase));
+
+        if (climateCount > 0)
+        {
+            return climateCount == 1 ? "1 climate device" : $"{climateCount} climate devices";
+        }
+
+        if (mediaCount > 0)
+        {
+            return mediaCount == 1 ? "1 media device" : $"{mediaCount} media devices";
+        }
+
+        return room.Sensors.Count == 1 ? "1 device" : $"{room.Sensors.Count} devices";
+    }
+
+    private static string GetRoomPrimaryState(RoomDto room)
+    {
+        if (room.Sensors.Any(sensor => !sensor.Online))
+        {
+            return "Check offline devices";
+        }
+
+        if (room.Sensors.Any(IsAttentionState))
+        {
+            return "Needs attention";
+        }
+
+        return "Ready";
+    }
+
+    private static int GetRoomAttentionCount(RoomDto room)
+    {
+        return room.Sensors.Count(sensor => !sensor.Online || IsAttentionState(sensor));
+    }
+
+    private static bool IsAttentionState(SensorDto sensor)
+    {
+        return sensor.Status.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+               sensor.Status.Equals("open", StringComparison.OrdinalIgnoreCase) ||
+               sensor.Status.Equals("detected", StringComparison.OrdinalIgnoreCase) ||
+               sensor.Status.Equals("leak", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed record RoomCardModel(
+        string Name,
+        int SensorCount,
+        int OnlineCount,
+        string TemperatureLabel,
+        string PrimaryState,
+        int AttentionCount,
+        string SensorSummary);
+}

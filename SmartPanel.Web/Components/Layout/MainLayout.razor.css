@@ -105,6 +105,31 @@
     }
 }
 
+@media (min-width: 641px) and (max-width: 900px), (min-width: 641px) and (max-height: 520px) {
+    .sidebar {
+        width: 92px;
+    }
+
+    .top-row {
+        height: 3rem;
+    }
+
+    .neo-top-title {
+        display: none;
+    }
+
+    .theme-toggle {
+        padding: 0.36rem 0.68rem;
+        font-size: 0.8rem;
+    }
+
+    .top-row,
+    article {
+        padding-left: 0.9rem !important;
+        padding-right: 0.9rem !important;
+    }
+}
+
 #blazor-error-ui {
     background: #fff4cc;
     bottom: 0;

@@ -1,0 +1,217 @@
+@page "/touch/{RoomName}"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@using System.Globalization
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+@inject NavigationManager Navigation
+
+<PageTitle>@DisplayRoomName</PageTitle>
+
+<section class="page-shell pi-room-detail-page">
+    <header class="pi-room-detail-header">
+        <div class="pi-room-title-row">
+            <button type="button" class="scene-btn" @onclick="BackToRooms">Back</button>
+
+            <div>
+                <div class="pi-kicker">Room Detail</div>
+                <h1>@DisplayRoomName</h1>
+                <p class="page-subtitle">Touch-friendly room view for the Raspberry Pi display.</p>
+            </div>
+
+            <div class="pi-browser-actions">
+                <a class="scene-btn pi-link-btn" href="/rooms">Advanced</a>
+                <button type="button" class="scene-btn" disabled="@isLoading" @onclick="LoadRoomAsync">Refresh</button>
+            </div>
+        </div>
+
+        @if (room is not null)
+        {
+            <div class="pi-summary-strip">
+                <div class="pi-summary-chip">
+                    <span class="stat-label">Devices</span>
+                    <strong>@room.Sensors.Count</strong>
+                </div>
+                <div class="pi-summary-chip">
+                    <span class="stat-label">Online</span>
+                    <strong>@room.Sensors.Count(sensor => sensor.Online)</strong>
+                </div>
+                <div class="pi-summary-chip">
+                    <span class="stat-label">Temperature</span>
+                    <strong>@GetRoomTemperature(room)</strong>
+                </div>
+                <div class="pi-summary-chip">
+                    <span class="stat-label">Attention</span>
+                    <strong>@room.Sensors.Count(IsAttentionState)</strong>
+                </div>
+            </div>
+        }
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(loadError))
+    {
+        <div class="status-banner">@loadError</div>
+    }
+
+    @if (isLoading && room is null)
+    {
+        <div class="card">Loading room...</div>
+    }
+    else if (room is null)
+    {
+        <div class="card">Room not found.</div>
+    }
+    else
+    {
+        <div class="pi-sensor-grid">
+            @foreach (var sensor in OrderedSensors)
+            {
+                <article class="card pi-sensor-card @(sensor.Online ? string.Empty : "pi-sensor-card-offline") @(IsAttentionState(sensor) ? "pi-sensor-card-alert" : string.Empty)">
+                    <div class="pi-sensor-top">
+                        <div class="pi-sensor-text">
+                            <strong>@sensor.Name</strong>
+                            <span class="pi-sensor-type">@FormatSensorType(sensor.Type)</span>
+                        </div>
+                        <span class="sensor-status @(sensor.Online ? "status-online" : "status-offline")">@(sensor.Online ? "Online" : "Offline")</span>
+                    </div>
+
+                    <div class="pi-sensor-value">@FormatSensorValue(sensor)</div>
+
+                    <div class="pi-sensor-foot">
+                        <span>@FormatSensorState(sensor.Status)</span>
+                        <span>@sensor.UpdatedAt.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture)</span>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter]
+    public string RoomName { get; set; } = string.Empty;
+
+    private RoomDto? room;
+    private bool isLoading = true;
+    private string? loadError;
+
+    private string DisplayRoomName => Uri.UnescapeDataString(RoomName);
+
+    private IEnumerable<SensorDto> OrderedSensors => room is null
+        ? []
+        : room.Sensors
+            .OrderBy(sensor => GetTypeRank(sensor.Type))
+            .ThenBy(sensor => sensor.Name, StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadRoomAsync();
+    }
+
+    private async Task LoadRoomAsync()
+    {
+        isLoading = true;
+        loadError = null;
+
+        try
+        {
+            var rooms = await ApiClient.GetRoomsAsync();
+            room = rooms.FirstOrDefault(item => item.Name.Equals(DisplayRoomName, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            loadError = $"Room load failed: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void BackToRooms()
+    {
+        Navigation.NavigateTo("/touch");
+    }
+
+    private static string GetRoomTemperature(RoomDto room)
+    {
+        var values = room.Sensors
+            .Where(sensor =>
+                sensor.Value.HasValue &&
+                (sensor.Type.Equals("temp", StringComparison.OrdinalIgnoreCase) ||
+                 sensor.Type.Equals("environment", StringComparison.OrdinalIgnoreCase)) &&
+                (sensor.Unit.Contains("C", StringComparison.OrdinalIgnoreCase) ||
+                 sensor.Unit.Contains("°", StringComparison.OrdinalIgnoreCase)))
+            .Select(sensor => sensor.Value!.Value)
+            .ToList();
+
+        return values.Count == 0 ? "N/A" : $"{values.Average():0.#} C";
+    }
+
+    private static string FormatSensorValue(SensorDto sensor)
+    {
+        if (sensor.Value.HasValue)
+        {
+            return $"{sensor.Value.Value.ToString("0.#", CultureInfo.InvariantCulture)} {sensor.Unit}".Trim();
+        }
+
+        return FormatSensorState(sensor.Status);
+    }
+
+    private static string FormatSensorState(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return "Unknown";
+        }
+
+        return status switch
+        {
+            "on" => "On",
+            "off" => "Off",
+            "open" => "Open",
+            "closed" => "Closed",
+            "detected" => "Detected",
+            _ => status
+        };
+    }
+
+    private static string FormatSensorType(string type)
+    {
+        return type switch
+        {
+            "temp" => "Temperature",
+            "environment" => "Environment",
+            "motion" => "Motion",
+            "door" => "Door",
+            "climate" => "Climate",
+            "media" => "Media",
+            "camera" => "Camera",
+            "humidity" => "Humidity",
+            _ => type
+        };
+    }
+
+    private static bool IsAttentionState(SensorDto sensor)
+    {
+        return !sensor.Online ||
+               sensor.Status.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+               sensor.Status.Equals("open", StringComparison.OrdinalIgnoreCase) ||
+               sensor.Status.Equals("detected", StringComparison.OrdinalIgnoreCase) ||
+               sensor.Status.Equals("leak", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int GetTypeRank(string type)
+    {
+        return type switch
+        {
+            "climate" => 0,
+            "temp" => 1,
+            "environment" => 2,
+            "door" => 3,
+            "motion" => 4,
+            "media" => 5,
+            "camera" => 6,
+            _ => 7
+        };
+    }
+}

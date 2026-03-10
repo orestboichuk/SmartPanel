@@ -1194,3 +1194,266 @@ h3 {
 .tv-media-btn { flex: 1; font-size: 1.1rem; padding: 0.5rem; }
 .tv-source-row { display: flex; gap: 0.4rem; align-items: center; }
 .tv-source-row .input-control { flex: 1; }
+
+.pi-room-browser,
+.pi-room-detail-page {
+    gap: 0.8rem;
+}
+
+.pi-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--muted);
+    font-size: 0.72rem;
+    margin-bottom: 0.3rem;
+}
+
+.pi-browser-header,
+.pi-room-detail-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+}
+
+.pi-browser-subtitle {
+    max-width: 34rem;
+}
+
+.pi-browser-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.pi-link-btn {
+    display: inline-flex;
+    align-items: center;
+    text-decoration: none;
+}
+
+.pi-room-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(126px, 1fr));
+    gap: 0.7rem;
+}
+
+.pi-room-tile {
+    border: 1px solid rgba(137, 175, 220, 0.34);
+    border-radius: 1.1rem;
+    padding: 0.85rem;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+    min-height: 124px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.5rem;
+    background:
+        linear-gradient(150deg, rgba(255, 255, 255, 0.11), transparent 55%),
+        linear-gradient(175deg, rgba(30, 45, 66, 0.92), rgba(18, 26, 40, 0.9));
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.32);
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.pi-room-tile:hover,
+.pi-room-tile:focus {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--primary) 78%, var(--border));
+    box-shadow: 0 16px 36px rgba(8, 18, 34, 0.42);
+}
+
+.pi-room-tile-head,
+.pi-room-meta,
+.pi-sensor-top,
+.pi-sensor-foot,
+.pi-room-title-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.55rem;
+    align-items: center;
+}
+
+.pi-room-label {
+    color: var(--muted);
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.pi-room-attention {
+    color: #ffc37a;
+    font-size: 0.74rem;
+    font-weight: 700;
+}
+
+.pi-room-name {
+    font-size: 1rem;
+    line-height: 1.15;
+}
+
+.pi-room-reading {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #ffe2a3;
+}
+
+.pi-room-meta {
+    color: var(--muted);
+    font-size: 0.78rem;
+    flex-wrap: wrap;
+}
+
+.pi-browser-footer {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.7rem;
+}
+
+.pi-browser-stat {
+    min-height: 84px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.25rem;
+}
+
+.pi-summary-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.pi-summary-chip {
+    border: 1px solid var(--border);
+    border-radius: 0.9rem;
+    padding: 0.7rem 0.8rem;
+    background:
+        linear-gradient(150deg, rgba(255, 255, 255, 0.1), transparent 55%),
+        var(--surface-alt);
+    display: flex;
+    flex-direction: column;
+    gap: 0.24rem;
+}
+
+.pi-summary-chip strong {
+    font-size: 1.18rem;
+}
+
+.pi-sensor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+    gap: 0.75rem;
+}
+
+.pi-sensor-card {
+    min-height: 138px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.pi-sensor-card-offline {
+    border-color: color-mix(in srgb, var(--danger-text) 70%, var(--border));
+}
+
+.pi-sensor-card-alert {
+    box-shadow: 0 0 0 1px rgba(255, 185, 92, 0.18), var(--shadow);
+}
+
+.pi-sensor-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    min-width: 0;
+}
+
+.pi-sensor-text strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pi-sensor-type {
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.pi-sensor-value {
+    font-size: 1.24rem;
+    font-weight: 700;
+}
+
+.pi-sensor-foot {
+    color: var(--muted);
+    font-size: 0.78rem;
+    flex-wrap: wrap;
+}
+
+@media (max-width: 900px), (max-height: 520px) {
+    .content {
+        padding-top: 0.7rem;
+    }
+
+    .page-shell {
+        gap: 0.75rem;
+    }
+
+    .page-header h1,
+    .pi-room-browser h1,
+    .pi-room-detail-page h1 {
+        font-size: 1.35rem;
+    }
+
+    .card {
+        padding: 0.8rem;
+    }
+
+    .pi-room-grid {
+        grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+        gap: 0.6rem;
+    }
+
+    .pi-room-tile {
+        min-height: 112px;
+        padding: 0.75rem;
+    }
+
+    .pi-room-reading {
+        font-size: 1.3rem;
+    }
+
+    .pi-browser-footer,
+    .pi-summary-strip {
+        gap: 0.55rem;
+    }
+
+    .pi-sensor-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.65rem;
+    }
+
+    .pi-sensor-card {
+        min-height: 122px;
+    }
+}
+
+@media (max-width: 640px) {
+    .pi-browser-footer,
+    .pi-summary-strip,
+    .pi-sensor-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .pi-room-title-row {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
