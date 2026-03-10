@@ -260,6 +260,19 @@ CREATE TABLE IF NOT EXISTS device_display_overrides (
 
         await db.Database.ExecuteSqlRawAsync(@"
 CREATE UNIQUE INDEX IF NOT EXISTS IX_device_display_overrides_presentation_key ON device_display_overrides (presentation_key);");
+
+        await db.Database.ExecuteSqlRawAsync(@"
+CREATE TABLE IF NOT EXISTS device_type_overrides (
+    id INTEGER NOT NULL CONSTRAINT PK_device_type_overrides PRIMARY KEY AUTOINCREMENT,
+    presentation_key TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    original_type TEXT NOT NULL,
+    type_override TEXT NULL,
+    updated_at_utc TEXT NOT NULL
+);");
+
+        await db.Database.ExecuteSqlRawAsync(@"
+CREATE UNIQUE INDEX IF NOT EXISTS IX_device_type_overrides_presentation_key ON device_type_overrides (presentation_key);");
     }
 
     private static async Task EnsureDirectCameraTablesAsync(SmartPanelDbContext db)

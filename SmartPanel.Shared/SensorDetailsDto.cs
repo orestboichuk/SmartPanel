@@ -6,6 +6,8 @@ public class SensorDetailsDto
     public string OriginalName { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string? DisplayNameOverride { get; set; }
+    public string OriginalType { get; set; } = string.Empty;
+    public string? TypeOverride { get; set; }
     public string Type { get; set; } = string.Empty;
     public string Domain { get; set; } = string.Empty;
     public string? DeviceClass { get; set; }

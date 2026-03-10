@@ -113,6 +113,7 @@
                         <div class="detail-grid">
                             <div class="metric-row"><span>Name</span><strong>@selectedDetails.DisplayName</strong></div>
                             <div class="metric-row"><span>Original</span><strong>@selectedDetails.OriginalName</strong></div>
+                            <div class="metric-row"><span>Type</span><strong>@FormatDeviceType(selectedDetails.Type)</strong></div>
                             <div class="metric-row"><span>Room</span><strong>@selectedDetails.RoomName</strong></div>
                             <div class="metric-row"><span>State</span><strong>@selectedDetails.DisplayState</strong></div>
                             <div class="metric-row"><span>Current</span><strong>@FormatCurrentValue(selectedDetails)</strong></div>
@@ -137,54 +138,90 @@
                                 <button type="button" class="scene-btn" disabled="@savingDisplayName" @onclick="SaveDisplayNameAsync">Save</button>
                                 <button type="button" class="scene-btn" disabled="@savingDisplayName" @onclick="ResetDisplayNameAsync">Reset</button>
                             </div>
-                            <div class="sensor-updated">Stored only in SmartPanel DB. Home Assistant keeps the original device name.</div>
+                            <label class="rename-label" for="device-type-input">Device type</label>
+                            <div class="control-row rename-row">
+                                <select id="device-type-input" class="input-control rename-input" @bind="selectedTypeOverride">
+                                    <option value="">Auto (@FormatDeviceType(selectedDetails.OriginalType))</option>
+                                    @foreach (var typeOption in DeviceTypeOptions)
+                                    {
+                                        <option value="@typeOption.Key">@typeOption.Value</option>
+                                    }
+                                </select>
+                                <button type="button" class="scene-btn" disabled="@savingTypeOverride" @onclick="SaveTypeOverrideAsync">Save</button>
+                                <button type="button" class="scene-btn" disabled="@savingTypeOverride" @onclick="ResetTypeOverrideAsync">Reset</button>
+                            </div>
+                            <div class="sensor-updated">Stored only in SmartPanel DB. Manual type changes room classification and labels, while the original Home Assistant entity stays unchanged.</div>
                             @if (!string.IsNullOrWhiteSpace(displayNameMessage))
                             {
                                 <div class="status-banner rename-status">@displayNameMessage</div>
                             }
+                            @if (!string.IsNullOrWhiteSpace(typeOverrideMessage))
+                            {
+                                <div class="status-banner rename-status">@typeOverrideMessage</div>
+                            }
                         </div>
 
-                        @if (selectedDetails.Type == "climate")
+                        @if (selectedDetails.Domain == "climate")
                         {
-                            <div class="climate-panel">
-                                <div class="metric-row">
-                                    <span>Mode</span>
-                                    <strong>@(selectedDetails.CurrentMode ?? "unknown")</strong>
-                                </div>
-                                <div class="metric-row">
-                                    <span>Target</span>
-                                    <strong>@(selectedDetails.TargetTemperature?.ToString("0.#") ?? "-") C</strong>
-                                </div>
-
-                                <div class="control-row">
-                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="SendClimatePowerOn">Power On</button>
-                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => SendClimateCommand(powerOn: false)">Power Off</button>
+                            var roomClimateTarget = climateTargetInput ?? selectedDetails.TargetTemperature ?? 20;
+                            <article class="card climate-panel-card @(IsClimateOn ? "climate-card-on" : "")">
+                                <div class="climate-card-header">
+                                    <div>
+                                        <h2>@selectedDetails.DisplayName</h2>
+                                        <div class="sensor-updated">@selectedDetails.RoomName</div>
+                                    </div>
+                                    <span class="sensor-status @(selectedDetails.Online ? (IsClimateOn ? "status-online" : "status-offline") : "status-offline")">
+                                        @(selectedDetails.Online ? (IsClimateOn ? FormatClimateModeLabel(selectedDetails.CurrentMode) : "OFF") : "Offline")
+                                    </span>
                                 </div>
 
-                                <div class="control-row">
+                                <div class="climate-temps">
+                                    <div class="climate-temp-block">
+                                        <div class="climate-temp-label">Current</div>
+                                        <div class="climate-temp-value">
+                                            @(selectedDetails.CurrentValue.HasValue ? $"{selectedDetails.CurrentValue.Value:0.#}C" : "--")
+                                        </div>
+                                    </div>
+                                    <div class="climate-temp-divider">-></div>
+                                    <div class="climate-temp-block">
+                                        <div class="climate-temp-label">Target</div>
+                                        <div class="climate-temp-target">
+                                            <button class="climate-temp-btn" disabled="@sendingClimate" @onclick="() => ChangeTarget(-0.5)">-</button>
+                                            <span class="climate-temp-value">@roomClimateTarget.ToString("0.#")C</span>
+                                            <button class="climate-temp-btn" disabled="@sendingClimate" @onclick="() => ChangeTarget(0.5)">+</button>
+                                        </div>
+                                        <button type="button"
+                                                class="scene-btn scene-btn-active"
+                                                style="margin-top:0.4rem;width:100%"
+                                                disabled="@sendingClimate"
+                                                @onclick="() => SendClimateCommand(target: roomClimateTarget)">
+                                            Set
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="climate-modes">
                                     @foreach (var mode in ClimateModes)
                                     {
                                         <button type="button"
                                                 class="scene-btn @(IsModeActive(mode) ? "scene-btn-active" : "")"
                                                 disabled="@sendingClimate"
                                                 @onclick="() => SendClimateCommand(mode: mode)">
-                                            @mode
+                                            @FormatClimateModeLabel(mode)
                                         </button>
                                     }
                                 </div>
 
-                                <div class="control-row">
-                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => ChangeTarget(-0.5)">-0.5</button>
-                                    <input type="number" class="input-control climate-input" step="0.5" @bind="climateTargetInput" />
-                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => ChangeTarget(0.5)">+0.5</button>
-                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => SendClimateCommand(target: climateTargetInput)">Apply</button>
+                                <div class="control-row" style="margin-top:0.5rem">
+                                    <button type="button" class="scene-btn scene-btn-active" disabled="@sendingClimate" @onclick="SendClimatePowerOn">Power On</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => SendClimateCommand(powerOn: false)">Power Off</button>
                                 </div>
 
                                 @if (!string.IsNullOrWhiteSpace(climateMessage))
                                 {
                                     <div class="status-banner">@climateMessage</div>
                                 }
-                            </div>
+                            </article>
                         }
 
                         @if (selectedDetails.Domain == "media_player")
@@ -483,6 +520,9 @@
     private string displayNameInput = string.Empty;
     private bool savingDisplayName;
     private string? displayNameMessage;
+    private string selectedTypeOverride = string.Empty;
+    private bool savingTypeOverride;
+    private string? typeOverrideMessage;
     private bool refreshingRooms;
     private string detailsTab = "details";
     private readonly List<DateTime> motionLiveEvents = [];
@@ -495,6 +535,24 @@
     private List<SensorHistoryPointDto> NumericHistoryPoints => GetNumericHistoryPoints();
     private List<ChartModel> EnvironmentCharts => GetEnvironmentCharts();
     private static readonly double[] ChartGridLines = [20, 48, 76, 104];
+    private static readonly IReadOnlyList<KeyValuePair<string, string>> DeviceTypeOptions =
+    [
+        new("environment", "Environment"),
+        new("climate", "Climate"),
+        new("media", "Media"),
+        new("camera", "Camera"),
+        new("motion", "Motion"),
+        new("door", "Door"),
+        new("leak", "Leak"),
+        new("light", "Light"),
+        new("temp", "Temperature"),
+        new("humidity", "Humidity"),
+        new("switch", "Switch"),
+        new("lock", "Lock"),
+        new("cover", "Cover"),
+        new("sensor", "Sensor"),
+        new("other", "Other")
+    ];
 
     private List<(string Name, int Online, int Total, double? Temp)> RoomOverview =>
         FilteredRooms
@@ -514,6 +572,11 @@
         selectedDetails?.AvailableModes.Count > 0
             ? selectedDetails.AvailableModes
             : ["off", "cool", "heat", "fan_only", "dry", "auto"];
+
+    private bool IsClimateOn =>
+        selectedDetails is not null &&
+        !string.Equals(selectedDetails.CurrentMode, "off", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(selectedDetails.RawState, "off", StringComparison.OrdinalIgnoreCase);
 
     private List<RoomDto> FilteredRooms
     {
@@ -581,6 +644,7 @@
         tvMessage = null;
         cameraMessage = null;
         displayNameMessage = null;
+        typeOverrideMessage = null;
 
         try
         {
@@ -596,6 +660,7 @@
             await LoadMotionDebugAsync(selectedDetails);
             climateTargetInput = selectedDetails.TargetTemperature ?? selectedDetails.CurrentValue;
             SyncDisplayNameInput();
+            SyncTypeOverrideInput();
             SyncDeviceControlState();
         }
         catch (Exception ex)
@@ -610,7 +675,7 @@
 
     private async Task SendClimateCommand(bool? powerOn = null, string? mode = null, double? target = null)
     {
-        if (selectedDetails is null || selectedDetails.Type != "climate")
+        if (selectedDetails is null || !selectedDetails.Domain.Equals("climate", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
@@ -655,6 +720,7 @@
         await LoadMotionDebugAsync(selectedDetails);
         climateTargetInput = selectedDetails?.TargetTemperature ?? selectedDetails?.CurrentValue;
         SyncDisplayNameInput();
+        SyncTypeOverrideInput();
         SyncDeviceControlState();
     }
 
@@ -702,9 +768,58 @@
         return SaveDisplayNameAsync();
     }
 
+    private async Task SaveTypeOverrideAsync()
+    {
+        if (selectedDetails is null)
+        {
+            return;
+        }
+
+        savingTypeOverride = true;
+        detailsError = null;
+        typeOverrideMessage = null;
+
+        try
+        {
+            var result = await ApiClient.UpdateDeviceTypeAsync(new DeviceTypeOverrideRequestDto
+            {
+                EntityId = selectedDetails.EntityId,
+                Type = string.IsNullOrWhiteSpace(selectedTypeOverride) ? null : selectedTypeOverride
+            });
+
+            if (result is null)
+            {
+                detailsError = "Type update failed: device not found.";
+                return;
+            }
+
+            typeOverrideMessage = "Device type updated.";
+            await ReloadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"Type update error: {ex.Message}";
+        }
+        finally
+        {
+            savingTypeOverride = false;
+        }
+    }
+
+    private Task ResetTypeOverrideAsync()
+    {
+        selectedTypeOverride = string.Empty;
+        return SaveTypeOverrideAsync();
+    }
+
     private void SyncDisplayNameInput()
     {
         displayNameInput = selectedDetails?.DisplayNameOverride ?? string.Empty;
+    }
+
+    private void SyncTypeOverrideInput()
+    {
+        selectedTypeOverride = selectedDetails?.TypeOverride ?? string.Empty;
     }
 
     private void SyncDeviceControlState()
@@ -810,6 +925,20 @@
     {
         return selectedDetails?.CurrentMode is not null &&
                selectedDetails.CurrentMode.Equals(mode, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FormatClimateModeLabel(string? mode)
+    {
+        return (mode ?? string.Empty).ToLowerInvariant() switch
+        {
+            "cool" => "Cool",
+            "heat" => "Heat",
+            "auto" => "Auto",
+            "dry" => "Dry",
+            "fan_only" => "Fan",
+            "off" => "Off",
+            _ => string.IsNullOrWhiteSpace(mode) ? "Unknown" : mode
+        };
     }
 
     private void SelectDetailsTab()

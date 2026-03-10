@@ -112,6 +112,13 @@ public class SmartHomeApiClient
         return await response.Content.ReadFromJsonAsync<DeviceDisplayNameDto>();
     }
 
+    public async Task<DeviceTypeOverrideDto?> UpdateDeviceTypeAsync(DeviceTypeOverrideRequestDto request)
+    {
+        var response = await _httpClient.PostAsJsonAsync("api/rooms/device-type", request);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<DeviceTypeOverrideDto>();
+    }
+
     public async Task ControlClimateAsync(ClimateControlRequestDto request)
     {
         var response = await _httpClient.PostAsJsonAsync("api/sensors/climate/control", request);

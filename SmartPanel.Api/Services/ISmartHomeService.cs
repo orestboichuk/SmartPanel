@@ -17,6 +17,7 @@ public interface ISmartHomeService
     Task ActivateSceneAsync(string sceneName);
     Task AssignDeviceToRoomAsync(string entityId, string roomName);
     Task<DeviceDisplayNameDto?> UpdateDeviceDisplayNameAsync(DeviceDisplayNameRequestDto request);
+    Task<DeviceTypeOverrideDto?> UpdateDeviceTypeOverrideAsync(DeviceTypeOverrideRequestDto request);
     Task<List<LightDto>> GetLightsAsync();
     Task ControlLightAsync(LightControlRequestDto request);
     Task<List<ClimateDto>> GetClimateDevicesAsync();

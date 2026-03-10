@@ -12,6 +12,7 @@ public class SmartPanelDbContext : DbContext
     public DbSet<DeviceRoomBindingEntity> DeviceRoomBindings => Set<DeviceRoomBindingEntity>();
     public DbSet<HomeAssistantEntitySnapshotEntity> HomeAssistantEntitySnapshots => Set<HomeAssistantEntitySnapshotEntity>();
     public DbSet<DeviceDisplayOverrideEntity> DeviceDisplayOverrides => Set<DeviceDisplayOverrideEntity>();
+    public DbSet<DeviceTypeOverrideEntity> DeviceTypeOverrides => Set<DeviceTypeOverrideEntity>();
     public DbSet<DirectCameraEntity> DirectCameras => Set<DirectCameraEntity>();
     public DbSet<AppUserEntity> AppUsers => Set<AppUserEntity>();
     public DbSet<AppRoleEntity> AppRoles => Set<AppRoleEntity>();
@@ -78,6 +79,19 @@ public class SmartPanelDbContext : DbContext
             entity.Property(x => x.EntityId).HasColumnName("entity_id").HasMaxLength(255).IsRequired();
             entity.Property(x => x.OriginalName).HasColumnName("original_name").HasMaxLength(255).IsRequired();
             entity.Property(x => x.DisplayNameOverride).HasColumnName("display_name_override").HasMaxLength(255);
+            entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
+            entity.HasIndex(x => x.PresentationKey).IsUnique();
+        });
+
+        modelBuilder.Entity<DeviceTypeOverrideEntity>(entity =>
+        {
+            entity.ToTable("device_type_overrides");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.PresentationKey).HasColumnName("presentation_key").HasMaxLength(255).IsRequired();
+            entity.Property(x => x.EntityId).HasColumnName("entity_id").HasMaxLength(255).IsRequired();
+            entity.Property(x => x.OriginalType).HasColumnName("original_type").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.TypeOverride).HasColumnName("type_override").HasMaxLength(64);
             entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
             entity.HasIndex(x => x.PresentationKey).IsUnique();
         });

@@ -54,4 +54,21 @@ public class RoomsController : ControllerBase
 
         return Ok(result);
     }
+
+    [HttpPost("device-type")]
+    public async Task<IActionResult> UpdateDeviceType([FromBody] DeviceTypeOverrideRequestDto request)
+    {
+        if (string.IsNullOrWhiteSpace(request.EntityId))
+        {
+            return BadRequest("entityId is required.");
+        }
+
+        var result = await _service.UpdateDeviceTypeOverrideAsync(request);
+        if (result is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(result);
+    }
 }

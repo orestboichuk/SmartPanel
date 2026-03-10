@@ -11,6 +11,24 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
 {
     private static readonly string[] DevicePartSuffixes = ["_temperature", "_humidity", "_battery", "_moisture", "_door", "_motion"];
     private static readonly string[] PreferredRoomOrder = ["Kitchen", "Bathroom", "Corridor", "Living Room", "Sofi Room", "Bedroom", "Unassigned"];
+    private static readonly HashSet<string> AllowedDeviceTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "environment",
+        "climate",
+        "media",
+        "camera",
+        "motion",
+        "door",
+        "leak",
+        "light",
+        "temp",
+        "humidity",
+        "switch",
+        "lock",
+        "cover",
+        "sensor",
+        "other"
+    };
     private static readonly Dictionary<string, string> FallbackRoomByDeviceKey = new(StringComparer.OrdinalIgnoreCase)
     {
         ["ai_pont"] = "Kitchen",
@@ -107,9 +125,10 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
             .ToListAsync();
 
         var overridesByPresentationKey = await GetDisplayOverridesByPresentationKeyAsync(snapshots);
+        var typeOverridesByPresentationKey = await GetTypeOverridesByPresentationKeyAsync(snapshots);
         var projections = snapshots
             .GroupBy(GetPresentationKey, StringComparer.OrdinalIgnoreCase)
-            .Select(group => MapRoomSensorGroup(group, overridesByPresentationKey))
+            .Select(group => MapRoomSensorGroup(group, overridesByPresentationKey, typeOverridesByPresentationKey))
             .ToList();
 
         return projections
@@ -132,30 +151,48 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
 
         var snapshots = await _db.HomeAssistantEntitySnapshots
             .AsNoTracking()
-            .Where(x => x.IsActive && x.Domain == "climate")
+            .Where(x => x.IsActive)
             .ToListAsync();
 
+        var overridesByPresentationKey = await GetDisplayOverridesByPresentationKeyAsync(snapshots);
+
         return snapshots
-            .Select(s =>
+            .GroupBy(GetPresentationKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
             {
-                var attrs = DeserializeDictionary(s.AttributesJson);
+                var items = group.ToList();
+                var climateSnapshot = items
+                    .Where(x => x.Domain == "climate")
+                    .OrderByDescending(x => x.IsOnline)
+                    .ThenBy(x => x.DisplayName, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+
+                if (climateSnapshot is null)
+                {
+                    return null;
+                }
+
+                var attrs = DeserializeDictionary(climateSnapshot.AttributesJson);
+                var originalName = ResolveOriginalDisplayName(items);
+                var overrideEntity = overridesByPresentationKey.GetValueOrDefault(group.Key);
+
                 return new ClimateDto
                 {
-                    Id = s.EntityId,
-                    Name = s.DisplayName,
-                    IsOn = !string.Equals(s.RawState, "off", StringComparison.OrdinalIgnoreCase)
-                           && !string.Equals(s.RawState, "unavailable", StringComparison.OrdinalIgnoreCase),
-                    Online = s.IsOnline,
-                    RoomName = s.RoomName ?? string.Empty,
-                    CurrentMode = s.RawState,
-                    CurrentTemperature = s.NumericValue,
-                    TargetTemperature = double.TryParse(GetString(attrs, "temperature"),
-                        System.Globalization.NumberStyles.Any,
-                        System.Globalization.CultureInfo.InvariantCulture, out var t) ? t : null,
+                    Id = climateSnapshot.EntityId,
+                    Name = GetEffectiveDisplayName(originalName, overrideEntity),
+                    IsOn = !string.Equals(climateSnapshot.RawState, "off", StringComparison.OrdinalIgnoreCase)
+                           && !string.Equals(climateSnapshot.RawState, "unavailable", StringComparison.OrdinalIgnoreCase),
+                    Online = ResolvePresentationOnline(items, "climate"),
+                    RoomName = ResolvePresentationRoom(items),
+                    CurrentMode = GetString(attrs, "hvac_mode") ?? climateSnapshot.RawState,
+                    CurrentTemperature = ParseDouble(GetString(attrs, "current_temperature")) ?? climateSnapshot.NumericValue,
+                    TargetTemperature = ParseDouble(GetString(attrs, "temperature")),
                     AvailableModes = GetStringList(attrs, "hvac_modes"),
-                    UpdatedAt = s.LastUpdatedUtc.ToLocalTime()
+                    UpdatedAt = items.Max(x => x.LastUpdatedUtc).ToLocalTime()
                 };
             })
+            .Where(x => x is not null)
+            .Cast<ClimateDto>()
             .OrderBy(x => x.RoomName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -436,6 +473,76 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
         };
     }
 
+    public async Task<DeviceTypeOverrideDto?> UpdateDeviceTypeOverrideAsync(DeviceTypeOverrideRequestDto request)
+    {
+        var id = NormalizeEntityId(request.EntityId);
+        if (id.Length == 0)
+        {
+            return null;
+        }
+
+        await SyncSnapshotsAsync();
+
+        var snapshot = await _db.HomeAssistantEntitySnapshots
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.EntityId == id && x.IsActive);
+
+        if (snapshot is null)
+        {
+            return null;
+        }
+
+        var group = await GetPresentationGroupAsync(snapshot, asNoTracking: true);
+        var originalType = ResolvePresentationType(group);
+        var overrideType = NormalizeTypeOverride(request.Type);
+        if (string.Equals(originalType, overrideType, StringComparison.OrdinalIgnoreCase))
+        {
+            overrideType = null;
+        }
+
+        var presentationKey = GetPresentationKey(snapshot);
+        var representativeEntityId = SelectRepresentativeEntityId(group, originalType);
+        var existing = await _db.DeviceTypeOverrides.FirstOrDefaultAsync(x => x.PresentationKey == presentationKey);
+
+        if (overrideType is null)
+        {
+            if (existing is not null)
+            {
+                _db.DeviceTypeOverrides.Remove(existing);
+                await _db.SaveChangesAsync();
+            }
+        }
+        else if (existing is null)
+        {
+            _db.DeviceTypeOverrides.Add(new DeviceTypeOverrideEntity
+            {
+                PresentationKey = presentationKey,
+                EntityId = representativeEntityId,
+                OriginalType = originalType,
+                TypeOverride = overrideType,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+            await _db.SaveChangesAsync();
+        }
+        else
+        {
+            existing.EntityId = representativeEntityId;
+            existing.OriginalType = originalType;
+            existing.TypeOverride = overrideType;
+            existing.UpdatedAtUtc = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
+
+        return new DeviceTypeOverrideDto
+        {
+            EntityId = representativeEntityId,
+            PresentationKey = presentationKey,
+            OriginalType = originalType,
+            TypeOverride = overrideType,
+            EffectiveType = GetEffectivePresentationType(originalType, overrideType)
+        };
+    }
+
     public async Task ControlClimateAsync(ClimateControlRequestDto request)
     {
         if (string.IsNullOrWhiteSpace(request.EntityId) || !request.EntityId.StartsWith("climate.", StringComparison.OrdinalIgnoreCase))
@@ -514,9 +621,13 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
         var overrideEntity = await _db.DeviceDisplayOverrides
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.PresentationKey == presentationKey);
+        var typeOverrideEntity = await _db.DeviceTypeOverrides
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.PresentationKey == presentationKey);
 
         var originalName = ResolveOriginalDisplayName(group);
-        var presentationType = ResolvePresentationType(group);
+        var originalType = ResolvePresentationType(group);
+        var presentationType = GetEffectivePresentationType(originalType, typeOverrideEntity?.TypeOverride);
         var attrs = DeserializeDictionary(snapshot.AttributesJson);
         var capabilities = group.SelectMany(x => DeserializeStringList(x.CapabilitiesJson))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -557,6 +668,8 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
             OriginalName = originalName,
             DisplayName = GetEffectiveDisplayName(originalName, overrideEntity),
             DisplayNameOverride = NormalizeDisplayNameOverride(overrideEntity?.DisplayNameOverride),
+            OriginalType = originalType,
+            TypeOverride = NormalizeTypeOverride(typeOverrideEntity?.TypeOverride),
             Type = presentationType,
             Domain = snapshot.Domain,
             DeviceClass = GetString(attrs, "device_class"),
@@ -564,10 +677,10 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
             RawState = snapshot.RawState,
             DisplayState = snapshot.RawState,
             Unit = snapshot.Unit,
-            CurrentValue = snapshot.NumericValue,
-            CurrentMode = snapshot.Type == "climate" ? GetString(attrs, "hvac_mode") ?? snapshot.RawState : null,
-            TargetTemperature = snapshot.Type == "climate" ? ParseDouble(GetString(attrs, "temperature")) : null,
-            AvailableModes = snapshot.Type == "climate" ? GetStringList(attrs, "hvac_modes") : [],
+            CurrentValue = snapshot.Domain == "climate" ? ParseDouble(GetString(attrs, "current_temperature")) ?? snapshot.NumericValue : snapshot.NumericValue,
+            CurrentMode = snapshot.Domain == "climate" ? GetString(attrs, "hvac_mode") ?? snapshot.RawState : null,
+            TargetTemperature = snapshot.Domain == "climate" ? ParseDouble(GetString(attrs, "temperature")) : null,
+            AvailableModes = snapshot.Domain == "climate" ? GetStringList(attrs, "hvac_modes") : [],
             Capabilities = capabilities,
             Source = snapshot.Domain == "media_player" ? GetString(attrs, "source") : null,
             AvailableSources = snapshot.Domain == "media_player" ? GetStringList(attrs, "source_list") : [],
@@ -843,6 +956,27 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
         return overrides.ToDictionary(x => x.PresentationKey, StringComparer.OrdinalIgnoreCase);
     }
 
+    private async Task<Dictionary<string, DeviceTypeOverrideEntity>> GetTypeOverridesByPresentationKeyAsync(IEnumerable<HomeAssistantEntitySnapshotEntity> snapshots)
+    {
+        var keys = snapshots
+            .Select(GetPresentationKey)
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (keys.Count == 0)
+        {
+            return new Dictionary<string, DeviceTypeOverrideEntity>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var overrides = await _db.DeviceTypeOverrides
+            .AsNoTracking()
+            .Where(x => keys.Contains(x.PresentationKey))
+            .ToListAsync();
+
+        return overrides.ToDictionary(x => x.PresentationKey, StringComparer.OrdinalIgnoreCase);
+    }
+
     private async Task<List<HomeAssistantEntitySnapshotEntity>> GetPresentationGroupAsync(HomeAssistantEntitySnapshotEntity snapshot, bool asNoTracking)
     {
         IQueryable<HomeAssistantEntitySnapshotEntity> query = _db.HomeAssistantEntitySnapshots.Where(x => x.IsActive);
@@ -872,13 +1006,16 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
 
     private static RoomSensorProjection MapRoomSensorGroup(
         IGrouping<string, HomeAssistantEntitySnapshotEntity> group,
-        IReadOnlyDictionary<string, DeviceDisplayOverrideEntity> overridesByPresentationKey)
+        IReadOnlyDictionary<string, DeviceDisplayOverrideEntity> overridesByPresentationKey,
+        IReadOnlyDictionary<string, DeviceTypeOverrideEntity> typeOverridesByPresentationKey)
     {
         var items = group.ToList();
         var primary = SelectPrimaryItem(items);
         var originalName = ResolveOriginalDisplayName(items);
         var overrideEntity = overridesByPresentationKey.GetValueOrDefault(group.Key);
-        var presentationType = ResolvePresentationType(items);
+        var originalType = ResolvePresentationType(items);
+        var typeOverrideEntity = typeOverridesByPresentationKey.GetValueOrDefault(group.Key);
+        var presentationType = GetEffectivePresentationType(originalType, typeOverrideEntity?.TypeOverride);
         var temp = items.FirstOrDefault(x => x.Type == "temp");
         var humidity = items.FirstOrDefault(x => x.Type == "humidity");
 
@@ -888,7 +1025,7 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
 
         var sensor = new SensorDto
         {
-            Id = SelectRepresentativeEntityId(items, presentationType),
+            Id = SelectRepresentativeEntityId(items, originalType),
             OriginalName = originalName,
             Name = GetEffectiveDisplayName(originalName, overrideEntity),
             Type = presentationType,
@@ -1287,10 +1424,26 @@ public class HomeAssistantSmartHomeService : ISmartHomeService
         return overrideName ?? originalName;
     }
 
+    private static string GetEffectivePresentationType(string originalType, string? typeOverride)
+    {
+        return NormalizeTypeOverride(typeOverride) ?? originalType;
+    }
+
     private static string? NormalizeDisplayNameOverride(string? value)
     {
         var trimmed = NormalizeDisplayName(value ?? string.Empty);
         return trimmed.Length == 0 ? null : trimmed;
+    }
+
+    private static string? NormalizeTypeOverride(string? value)
+    {
+        var trimmed = (value ?? string.Empty).Trim().ToLowerInvariant();
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        return AllowedDeviceTypes.Contains(trimmed) ? trimmed : null;
     }
 
     private static string NormalizeDisplayName(string value)

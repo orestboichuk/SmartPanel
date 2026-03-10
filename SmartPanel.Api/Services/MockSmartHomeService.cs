@@ -12,6 +12,7 @@ public class MockSmartHomeService : ISmartHomeService
     private int _livingRoomTvVolume = 22;
     private int _bedroomTvVolume = 10;
     private readonly Dictionary<string, string> _roomAssignments = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _typeOverrides = new(StringComparer.OrdinalIgnoreCase);
 
     public Task<DashboardDto> GetDashboardAsync()
     {
@@ -156,6 +157,12 @@ public class MockSmartHomeService : ISmartHomeService
 
     public Task<SensorDetailsDto?> GetSensorDetailsAsync(string entityId, int hours = 24)
     {
+        var originalType = entityId.Contains("temp", StringComparison.OrdinalIgnoreCase) ? "temp"
+            : entityId.Contains("hum", StringComparison.OrdinalIgnoreCase) ? "humidity"
+            : entityId.Contains("leak", StringComparison.OrdinalIgnoreCase) ? "leak"
+            : "sensor";
+        var typeOverride = _typeOverrides.GetValueOrDefault(entityId);
+
         var details = new SensorDetailsDto
         {
             EntityId = entityId,
@@ -168,10 +175,9 @@ public class MockSmartHomeService : ISmartHomeService
                 "binary_sensor.leak_kitchen" => "Датчик протікання",
                 _ => entityId
             },
-            Type = entityId.Contains("temp", StringComparison.OrdinalIgnoreCase) ? "temp"
-                : entityId.Contains("hum", StringComparison.OrdinalIgnoreCase) ? "humidity"
-                : entityId.Contains("leak", StringComparison.OrdinalIgnoreCase) ? "leak"
-                : "sensor",
+            OriginalType = originalType,
+            TypeOverride = typeOverride,
+            Type = typeOverride ?? originalType,
             RoomName = entityId.Contains("kitchen", StringComparison.OrdinalIgnoreCase) ? "Kitchen" : "Living Room",
             RawState = entityId.Contains("leak", StringComparison.OrdinalIgnoreCase) ? "off" : "22.5",
             DisplayState = entityId.Contains("leak", StringComparison.OrdinalIgnoreCase) ? "Сухо" : "Норма",
@@ -277,6 +283,30 @@ public class MockSmartHomeService : ISmartHomeService
             OriginalName = originalName,
             DisplayNameOverride = overrideName,
             EffectiveDisplayName = overrideName ?? originalName
+        });
+    }
+
+    public Task<DeviceTypeOverrideDto?> UpdateDeviceTypeOverrideAsync(DeviceTypeOverrideRequestDto request)
+    {
+        var originalType = "sensor";
+        var overrideType = string.IsNullOrWhiteSpace(request.Type) ? null : request.Type.Trim().ToLowerInvariant();
+
+        if (overrideType is null)
+        {
+            _typeOverrides.Remove(request.EntityId);
+        }
+        else
+        {
+            _typeOverrides[request.EntityId] = overrideType;
+        }
+
+        return Task.FromResult<DeviceTypeOverrideDto?>(new DeviceTypeOverrideDto
+        {
+            EntityId = request.EntityId,
+            PresentationKey = request.EntityId,
+            OriginalType = originalType,
+            TypeOverride = overrideType,
+            EffectiveType = overrideType ?? originalType
         });
     }
 
