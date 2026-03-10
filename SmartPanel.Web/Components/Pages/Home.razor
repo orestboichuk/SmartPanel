@@ -1,0 +1,330 @@
+﻿@page "/"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+
+<PageTitle>Dashboard</PageTitle>
+
+<section class="page-shell dashboard-neo">
+    <header class="page-header neo-header">
+        <div>
+            <h1>SmartPanel Command Deck</h1>
+            <p class="page-subtitle">Live automation, climate, rooms and camera health in one control surface.</p>
+        </div>
+        <div class="control-row neo-actions">
+            <button type="button" class="scene-btn" disabled="@isAdminActionRunning" @onclick="ClearAllDataAsync">Clear All Data</button>
+            <button type="button" class="scene-btn scene-btn-active" disabled="@isAdminActionRunning" @onclick="ClearAndResyncAsync">Clear + Resync</button>
+        </div>
+    </header>
+
+    @if (dashboard is null)
+    {
+        <div class="card">Loading dashboard...</div>
+    }
+    else
+    {
+        <div class="neo-layout">
+            <div class="neo-main">
+                <div class="dashboard-grid neo-stat-grid">
+                    <div class="card stat-card neo-card">
+                        <span class="stat-label">Time</span>
+                        <strong class="stat-value">@dashboard.CurrentTime.ToString("HH:mm:ss")</strong>
+                    </div>
+                    <div class="card stat-card neo-card">
+                        <span class="stat-label">Date</span>
+                        <strong class="stat-value">@dashboard.CurrentTime.ToString("dd.MM.yyyy")</strong>
+                    </div>
+                    <div class="card stat-card neo-card">
+                        <span class="stat-label">House Status</span>
+                        <strong class="stat-value">@dashboard.HouseStatus</strong>
+                    </div>
+                    <div class="card stat-card neo-card">
+                        <span class="stat-label">Alerts</span>
+                        <strong class="stat-value">@dashboard.AlertsCount</strong>
+                    </div>
+                    <div class="card stat-card neo-card">
+                        <span class="stat-label">Sensors Online</span>
+                        <strong class="stat-value">@OnlineSensors / @TotalSensors</strong>
+                    </div>
+                    <div class="card stat-card neo-card">
+                        <span class="stat-label">Cameras Online</span>
+                        <strong class="stat-value">@OnlineCameras / @TotalCameras</strong>
+                    </div>
+                </div>
+
+                <div class="analytics-grid neo-analytics-grid">
+                    <article class="card neo-card">
+                        <div class="section-title-row">
+                            <h2>Environment Core</h2>
+                        </div>
+                        <div class="metric-row">
+                            <span>Average Temperature</span>
+                            <strong>@FormatNullable(AverageTemperature, " C")</strong>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-fill" style="@GetWidthStyle(Normalize(AverageTemperature, 10, 35))"></div>
+                        </div>
+
+                        <div class="metric-row">
+                            <span>Average Humidity</span>
+                            <strong>@FormatNullable(AverageHumidity, "%")</strong>
+                        </div>
+                        <div class="progress-track">
+                            <div class="progress-fill warm" style="@GetWidthStyle(Normalize(AverageHumidity, 15, 80))"></div>
+                        </div>
+                    </article>
+
+                    <article class="card neo-card">
+                        <div class="section-title-row">
+                            <h2>Room Heatmap</h2>
+                        </div>
+                        @if (RoomTemperatureData.Count == 0)
+                        {
+                            <p class="page-subtitle">No temperature data available.</p>
+                        }
+                        else
+                        {
+                            <div class="bars-list">
+                                @foreach (var item in RoomTemperatureData)
+                                {
+                                    <div class="bar-row">
+                                        <span class="bar-label">@item.Room</span>
+                                        <div class="bar-track">
+                                            <div class="bar-fill" style="@GetWidthStyle(Normalize(item.Value, 10, 35))"></div>
+                                        </div>
+                                        <strong class="bar-value">@item.Value.ToString("0.#") C</strong>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </article>
+                </div>
+
+                <article class="card neo-card">
+                    <div class="section-title-row">
+                        <h2>Scenes</h2>
+                    </div>
+                    <div class="scenes">
+                        @foreach (var scene in dashboard.Scenes)
+                        {
+                            <button type="button"
+                                    class="scene-btn @(scene.IsActive ? "scene-btn-active" : "")"
+                                    @onclick="() => ActivateScene(scene.Name)">
+                                @scene.Name
+                            </button>
+                        }
+                    </div>
+                </article>
+            </div>
+
+            <aside class="card neo-card neo-side-panel">
+                <div class="section-title-row">
+                    <h2>Rooms Live</h2>
+                </div>
+                <div class="neo-room-tiles">
+                    @foreach (var room in RoomTiles)
+                    {
+                        <div class="neo-room-tile">
+                            <div>
+                                <strong>@room.Name</strong>
+                                <div class="sensor-updated">@room.Online/@room.Total online</div>
+                            </div>
+                            <div class="neo-room-temp">@FormatNullable(room.Temp, " C")</div>
+                        </div>
+                    }
+                </div>
+
+                <div class="section-title-row neo-section-gap">
+                    <h2>Cameras</h2>
+                </div>
+                <div class="neo-camera-list">
+                    @foreach (var camera in cameras.Take(6))
+                    {
+                        <div class="neo-camera-item">
+                            <span>@camera.Name</span>
+                            <span class="sensor-status @(camera.Online ? "status-online" : "status-offline")">@(camera.Online ? "Online" : "Offline")</span>
+                        </div>
+                    }
+                </div>
+
+                <div class="section-title-row neo-section-gap">
+                    <h2>External Services</h2>
+                </div>
+                @if (dashboard.Services.Count == 0)
+                {
+                    <p class="page-subtitle">No service entities detected.</p>
+                }
+                else
+                {
+                    <div class="neo-service-list">
+                        @foreach (var service in dashboard.Services)
+                        {
+                            <div class="neo-service-item">
+                                <div>
+                                    <strong>@service.Name</strong>
+                                    <div class="sensor-updated">@service.Kind</div>
+                                </div>
+                                <div class="neo-service-right">
+                                    <span class="sensor-status @(service.Online ? "status-online" : "status-offline")">@(service.Online ? "Online" : "Offline")</span>
+                                    <span class="log-time">@service.Value</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </aside>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(message))
+        {
+            <div class="status-banner">@message</div>
+        }
+    }
+</section>
+
+@code {
+    private DashboardDto? dashboard;
+    private List<RoomDto> rooms = [];
+    private List<CameraDto> cameras = [];
+    private string? message;
+    private bool isAdminActionRunning;
+
+    private int TotalSensors => rooms.Sum(r => r.Sensors.Count);
+    private int OnlineSensors => rooms.Sum(r => r.Sensors.Count(s => s.Online));
+    private int TotalCameras => cameras.Count;
+    private int OnlineCameras => cameras.Count(c => c.Online);
+
+    private double? AverageTemperature => AverageByType("temp");
+    private double? AverageHumidity => AverageByType("humidity");
+
+    private List<(string Room, double Value)> RoomTemperatureData =>
+        rooms.Select(r =>
+            (
+                Room: r.Name,
+                Value: r.Sensors.Where(s => s.Type == "temp" && s.Value.HasValue).Select(s => s.Value!.Value).DefaultIfEmpty().Average()
+            ))
+            .Where(x => x.Value > 0)
+            .OrderByDescending(x => x.Value)
+            .ToList();
+
+    private List<(string Name, int Online, int Total, double? Temp)> RoomTiles =>
+        rooms.Select(r =>
+            (
+                Name: r.Name,
+                Online: r.Sensors.Count(s => s.Online),
+                Total: r.Sensors.Count,
+                Temp: GetRoomAverageTemp(r)
+            ))
+            .OrderByDescending(x => x.Online)
+            .ThenBy(x => x.Name)
+            .Take(6)
+            .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshDashboardDataAsync();
+    }
+
+    private async Task RefreshDashboardDataAsync()
+    {
+        var dashboardTask = ApiClient.GetDashboardAsync();
+        var roomsTask = ApiClient.GetRoomsAsync();
+        var camerasTask = ApiClient.GetCamerasAsync();
+
+        await Task.WhenAll(dashboardTask, roomsTask, camerasTask);
+
+        dashboard = await dashboardTask;
+        rooms = await roomsTask;
+        cameras = await camerasTask;
+    }
+
+    private async Task ActivateScene(string sceneName)
+    {
+        await ApiClient.ActivateSceneAsync(sceneName);
+        message = $"Scene activated: {sceneName}";
+        dashboard = await ApiClient.GetDashboardAsync();
+    }
+
+    private async Task ClearAllDataAsync()
+    {
+        isAdminActionRunning = true;
+        message = null;
+
+        try
+        {
+            await ApiClient.ClearAllDataAsync();
+            await RefreshDashboardDataAsync();
+            message = "All data cleared.";
+        }
+        catch (Exception ex)
+        {
+            message = $"Clear failed: {ex.Message}";
+        }
+        finally
+        {
+            isAdminActionRunning = false;
+        }
+    }
+
+    private async Task ClearAndResyncAsync()
+    {
+        isAdminActionRunning = true;
+        message = null;
+
+        try
+        {
+            await ApiClient.ClearAllDataAndResyncAsync();
+            await RefreshDashboardDataAsync();
+            message = "Data cleared and synced from Home Assistant.";
+        }
+        catch (Exception ex)
+        {
+            message = $"Resync failed: {ex.Message}";
+        }
+        finally
+        {
+            isAdminActionRunning = false;
+        }
+    }
+
+    private double? AverageByType(string type)
+    {
+        var values = rooms
+            .SelectMany(r => r.Sensors)
+            .Where(s => s.Type == type && s.Value.HasValue)
+            .Select(s => s.Value!.Value)
+            .ToList();
+
+        return values.Count == 0 ? null : values.Average();
+    }
+
+    private static double? GetRoomAverageTemp(RoomDto room)
+    {
+        var values = room.Sensors
+            .Where(s => s.Type == "temp" && s.Value.HasValue)
+            .Select(s => s.Value!.Value)
+            .ToList();
+        return values.Count == 0 ? null : values.Average();
+    }
+
+    private static string FormatNullable(double? value, string suffix)
+    {
+        return value.HasValue ? $"{value.Value:0.#}{suffix}" : "N/A";
+    }
+
+    private static double Normalize(double? value, double min, double max)
+    {
+        if (!value.HasValue)
+        {
+            return 0;
+        }
+
+        var raw = (value.Value - min) / (max - min) * 100;
+        return Math.Clamp(raw, 5, 100);
+    }
+
+    private static string GetWidthStyle(double width)
+    {
+        return $"width: {width:0.#}%";
+    }
+}

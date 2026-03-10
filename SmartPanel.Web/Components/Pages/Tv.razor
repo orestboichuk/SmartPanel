@@ -1,0 +1,192 @@
+@page "/tv"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@implements IDisposable
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+
+<PageTitle>Телевізори</PageTitle>
+
+<section class="page-shell">
+    <header class="page-header">
+        <div><h1>Телевізори</h1></div>
+        <div class="control-row">
+            <button type="button" class="scene-btn" disabled="@loading" @onclick="ReloadAsync">Оновити</button>
+        </div>
+    </header>
+
+    @if (tvs is null)
+    {
+        <div class="card">Завантаження...</div>
+    }
+    else if (tvs.Count == 0)
+    {
+        <div class="card">Медіаплеєри не знайдені.</div>
+    }
+    else
+    {
+        <div class="tv-panels-grid">
+            @foreach (var tv in tvs)
+            {
+                <article class="card tv-panel @(tv.Online && tv.State != "off" && tv.State != "unavailable" ? "tv-panel-on" : "")">
+                    <div class="tv-panel-header">
+                        <div>
+                            <h2>@tv.Name</h2>
+                            @if (!string.IsNullOrWhiteSpace(tv.RoomName))
+                            {
+                                <div class="sensor-updated">@tv.RoomName</div>
+                            }
+                        </div>
+                        <span class="sensor-status @(tv.Online ? "status-online" : "status-offline")">
+                            @(tv.Online ? TvStateLabel(tv.State) : "Offline")
+                        </span>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(tv.App) || !string.IsNullOrWhiteSpace(tv.Source))
+                    {
+                        <div class="tv-now-playing">
+                            @if (!string.IsNullOrWhiteSpace(tv.App))
+                            {
+                                <span>▶ @tv.App</span>
+                            }
+                            else if (!string.IsNullOrWhiteSpace(tv.Source))
+                            {
+                                <span>📺 @tv.Source</span>
+                            }
+                        </div>
+                    }
+
+                    @if (tv.VolumePercent.HasValue)
+                    {
+                        <div class="tv-volume-bar">
+                            <span class="sensor-updated">🔊 @tv.VolumePercent%</span>
+                            <div class="tv-vol-track">
+                                <div class="tv-vol-fill" style="width:@tv.VolumePercent%"></div>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="tv-power-row">
+                        <button class="scene-btn scene-btn-active tv-btn-wide" disabled="@sending"
+                                @onclick="() => SendAsync(tv.Id, powerOn: true)">⏻ Увімкнути</button>
+                        <button class="scene-btn tv-btn-wide" disabled="@sending"
+                                @onclick="() => SendAsync(tv.Id, powerOn: false)">⏼ Вимкнути</button>
+                    </div>
+
+                    <div class="tv-media-row">
+                        <button class="scene-btn tv-media-btn" disabled="@sending"
+                                @onclick="() => SendAsync(tv.Id, togglePlayPause: true)">⏯</button>
+                        <button class="scene-btn tv-media-btn" disabled="@sending"
+                                @onclick="() => SendAsync(tv.Id, volumeDown: true)">🔉</button>
+                        <button class="scene-btn tv-media-btn" disabled="@sending"
+                                @onclick="() => SendAsync(tv.Id, volumeUp: true)">🔊</button>
+                        <button class="scene-btn tv-media-btn @(tv.Muted == true ? "scene-btn-active" : "")" disabled="@sending"
+                                @onclick="() => SendAsync(tv.Id, mute: tv.Muted != true)">🔇</button>
+                    </div>
+
+                    @if (tv.AvailableSources.Count > 0)
+                    {
+                        <div class="tv-source-row">
+                            <select class="input-control" @bind="selectedSources[tv.Id]">
+                                @foreach (var src in tv.AvailableSources)
+                                {
+                                    <option value="@src">@src</option>
+                                }
+                            </select>
+                            <button class="scene-btn" disabled="@sending"
+                                    @onclick="() => SendAsync(tv.Id, source: GetSource(tv))">Set</button>
+                        </div>
+                    }
+                </article>
+            }
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(statusMessage))
+    {
+        <div class="card status-banner">@statusMessage</div>
+    }
+</section>
+
+@code {
+    private List<TvDto>? tvs;
+    private readonly Dictionary<string, string?> selectedSources = new(StringComparer.OrdinalIgnoreCase);
+    private bool loading;
+    private bool sending;
+    private string? statusMessage;
+    private PeriodicTimer? timer;
+    private CancellationTokenSource? timerCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+        timerCts = new CancellationTokenSource();
+        timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (timer is not null && await timer.WaitForNextTickAsync(timerCts.Token))
+                {
+                    await InvokeAsync(ReloadAsync);
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, timerCts.Token);
+    }
+
+    public void Dispose()
+    {
+        timerCts?.Cancel();
+        timerCts?.Dispose();
+        timer?.Dispose();
+    }
+
+    private async Task ReloadAsync()
+    {
+        loading = true;
+        try
+        {
+            tvs = await ApiClient.GetTvsAsync();
+            foreach (var tv in tvs.Where(t => t.AvailableSources.Count > 0))
+            {
+                if (!selectedSources.ContainsKey(tv.Id))
+                    selectedSources[tv.Id] = tv.Source ?? tv.AvailableSources[0];
+            }
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { loading = false; }
+    }
+
+    private async Task SendAsync(string id, bool? powerOn = null, bool? togglePlayPause = null,
+        bool? volumeUp = null, bool? volumeDown = null, bool? mute = null, string? source = null)
+    {
+        sending = true;
+        try
+        {
+            await ApiClient.ControlTvAsync(new TvControlRequestDto
+            {
+                EntityId = id, PowerOn = powerOn, TogglePlayPause = togglePlayPause,
+                VolumeUp = volumeUp, VolumeDown = volumeDown, Mute = mute, Source = source
+            });
+            await Task.Delay(300);
+            await ReloadAsync();
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { sending = false; }
+    }
+
+    private string? GetSource(TvDto tv) =>
+        selectedSources.TryGetValue(tv.Id, out var s) && !string.IsNullOrWhiteSpace(s)
+            ? s : tv.Source ?? tv.AvailableSources.FirstOrDefault();
+
+    private static string TvStateLabel(string? state) => state switch
+    {
+        "playing" => "▶ Грає",
+        "paused" => "⏸ Пауза",
+        "idle" => "⏹ Очікує",
+        "off" => "⏼ Вимк.",
+        "on" => "⏻ Увімк.",
+        _ => state ?? "—"
+    };
+}

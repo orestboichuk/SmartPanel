@@ -1,0 +1,42 @@
+# Build outputs
+bin/
+obj/
+dist/
+
+# Node
+node_modules/
+
+# IDE and local tools
+.vs/
+.vscode/
+.idea/
+.claude/
+
+# Local runtime and scratch folders
+.runlogs/
+.runtime/
+.tmpbuild/
+.tmpinspect/
+
+# Logs
+*.log
+*.err.log
+*.out.log
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# User-specific config overrides
+appsettings.Development.json
+*.user
+*.suo
+
+# OS artifacts
+Thumbs.db
+Desktop.ini
+
+# Local archives
+*.zip

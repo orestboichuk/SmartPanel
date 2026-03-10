@@ -1,0 +1,56 @@
+@page "/scenes"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+
+<PageTitle>Scenes</PageTitle>
+
+<section class="page-shell">
+    <header class="page-header">
+        <div>
+            <h1>Scenes</h1>
+            <p class="page-subtitle">Activate predefined automation profiles.</p>
+        </div>
+    </header>
+
+    @if (scenes is null)
+    {
+        <div class="card">Loading scenes...</div>
+    }
+    else if (scenes.Count == 0)
+    {
+        <div class="card">No scenes are available.</div>
+    }
+    else
+    {
+        <div class="rooms-grid">
+            @foreach (var scene in scenes)
+            {
+                <article class="card">
+                    <div class="room-card-header">
+                        <h3>@scene.Name</h3>
+                        <span class="sensor-status @(scene.IsActive ? "status-online" : "status-offline")">
+                            @(scene.IsActive ? "Active" : "Inactive")
+                        </span>
+                    </div>
+                    <button type="button" class="scene-btn" @onclick="() => Activate(scene.Name)">Activate</button>
+                </article>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    private List<SceneDto>? scenes;
+
+    protected override async Task OnInitializedAsync()
+    {
+        scenes = await ApiClient.GetScenesAsync();
+    }
+
+    private async Task Activate(string sceneName)
+    {
+        await ApiClient.ActivateSceneAsync(sceneName);
+        scenes = await ApiClient.GetScenesAsync();
+    }
+}

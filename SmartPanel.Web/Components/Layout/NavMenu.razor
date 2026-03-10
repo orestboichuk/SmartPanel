@@ -1,0 +1,64 @@
+﻿<div class="neo-nav-head">
+    <a class="navbar-brand" href="">
+        <span class="neo-brand-mark"></span>
+        <span class="neo-brand-text">
+            <strong>SmartPanel</strong>
+            <small>Control Deck</small>
+        </span>
+    </a>
+</div>
+
+<input type="checkbox" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="flex-column neo-nav-list">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Dashboard
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/rooms">
+                <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Rooms
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/cameras">
+                <span class="bi bi-camera-video-nav-menu" aria-hidden="true"></span> Cameras
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/lighting">
+                <span class="bi bi-lightbulb-nav-menu" aria-hidden="true"></span> Освітлення
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/climate">
+                <span class="bi bi-thermometer-nav-menu" aria-hidden="true"></span> Клімат
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/tv">
+                <span class="bi bi-tv-nav-menu" aria-hidden="true"></span> Телевізори
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="/scenes">
+                <span class="bi bi-lightning-charge-nav-menu" aria-hidden="true"></span> Scenes
+            </NavLink>
+        </div>
+    </nav>
+
+    <div class="neo-nav-foot px-3">
+        <div class="neo-nav-status">
+            <span class="neo-status-dot"></span>
+            System online
+        </div>
+    </div>
+</div>

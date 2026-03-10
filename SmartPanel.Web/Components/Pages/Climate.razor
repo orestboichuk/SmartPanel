@@ -1,0 +1,207 @@
+@page "/climate"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+@implements IDisposable
+
+<PageTitle>Клімат</PageTitle>
+
+<section class="page-shell">
+    <header class="page-header">
+        <div><h1>Клімат</h1></div>
+        <div class="control-row">
+            <button type="button" class="scene-btn" disabled="@loading" @onclick="LoadAsync">Оновити</button>
+        </div>
+    </header>
+
+    @if (devices is null)
+    {
+        <div class="card">Завантаження...</div>
+    }
+    else if (devices.Count == 0)
+    {
+        <div class="card">Пристроїв клімат-контролю не знайдено.</div>
+    }
+    else
+    {
+        <div class="climate-devices-grid">
+            @foreach (var device in devices)
+            {
+                var target = targetTemps.GetValueOrDefault(device.Id, device.TargetTemperature ?? 20);
+                <article class="card climate-panel-card @(device.IsOn ? "climate-card-on" : "")">
+                    <div class="climate-card-header">
+                        <div>
+                            <h2>@device.Name</h2>
+                            @if (!string.IsNullOrWhiteSpace(device.RoomName))
+                            {
+                                <div class="sensor-updated">@device.RoomName</div>
+                            }
+                        </div>
+                        <span class="sensor-status @(device.Online ? (device.IsOn ? "status-online" : "status-offline") : "status-offline")">
+                            @(device.Online ? (device.IsOn ? device.CurrentMode.ToUpperInvariant() : "ВИМК.") : "Offline")
+                        </span>
+                    </div>
+
+                    <div class="climate-temps">
+                        <div class="climate-temp-block">
+                            <div class="climate-temp-label">Поточна</div>
+                            <div class="climate-temp-value">
+                                @(device.CurrentTemperature.HasValue ? $"{device.CurrentTemperature:0.#}°C" : "—")
+                            </div>
+                        </div>
+                        <div class="climate-temp-divider">→</div>
+                        <div class="climate-temp-block">
+                            <div class="climate-temp-label">Ціль</div>
+                            <div class="climate-temp-target">
+                                <button class="climate-temp-btn" @onclick="@(() => AdjustTemp(device.Id, -0.5))">−</button>
+                                <span class="climate-temp-value">@target.ToString("0.#")°C</span>
+                                <button class="climate-temp-btn" @onclick="@(() => AdjustTemp(device.Id, +0.5))">+</button>
+                            </div>
+                            <button class="scene-btn scene-btn-active" style="margin-top:0.4rem;width:100%"
+                                    disabled="@sending"
+                                    @onclick="@(() => SetTemperatureAsync(device.Id, target))">
+                                Встановити
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="climate-modes">
+                        @foreach (var mode in device.AvailableModes)
+                        {
+                            <button class="scene-btn @(device.CurrentMode == mode ? "scene-btn-active" : "")"
+                                    disabled="@sending"
+                                    @onclick="@(() => SetModeAsync(device.Id, mode))">
+                                @ModeLabel(mode)
+                            </button>
+                        }
+                    </div>
+
+                    <div class="control-row" style="margin-top:0.5rem">
+                        <button class="scene-btn scene-btn-active" disabled="@sending"
+                                @onclick="@(() => SetPowerAsync(device.Id, true))">Увімкнути</button>
+                        <button class="scene-btn" disabled="@sending"
+                                @onclick="@(() => SetPowerAsync(device.Id, false))">Вимкнути</button>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(statusMessage))
+    {
+        <div class="card status-banner">@statusMessage</div>
+    }
+</section>
+
+@code {
+    private List<ClimateDto>? devices;
+    private readonly Dictionary<string, double> targetTemps = new(StringComparer.OrdinalIgnoreCase);
+    private bool loading;
+    private bool sending;
+    private string? statusMessage;
+    private PeriodicTimer? timer;
+    private CancellationTokenSource? timerCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        StartRefreshLoop();
+    }
+
+    public void Dispose()
+    {
+        timerCts?.Cancel();
+        timerCts?.Dispose();
+        timer?.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        try
+        {
+            devices = await ApiClient.GetClimateDevicesAsync();
+            foreach (var d in devices)
+            {
+                if (!targetTemps.ContainsKey(d.Id))
+                    targetTemps[d.Id] = d.TargetTemperature ?? 20;
+            }
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { loading = false; }
+    }
+
+    private void AdjustTemp(string id, double delta)
+    {
+        var current = targetTemps.GetValueOrDefault(id, 20);
+        targetTemps[id] = Math.Round(Math.Clamp(current + delta, 16, 32), 1);
+    }
+
+    private async Task SetTemperatureAsync(string id, double temp)
+    {
+        sending = true;
+        try
+        {
+            await ApiClient.ControlClimateDeviceAsync(new ClimateControlRequestDto { EntityId = id, TargetTemperature = temp });
+            await Task.Delay(400);
+            await LoadAsync();
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { sending = false; }
+    }
+
+    private async Task SetModeAsync(string id, string mode)
+    {
+        sending = true;
+        try
+        {
+            await ApiClient.ControlClimateDeviceAsync(new ClimateControlRequestDto { EntityId = id, HvacMode = mode });
+            await Task.Delay(400);
+            await LoadAsync();
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { sending = false; }
+    }
+
+    private async Task SetPowerAsync(string id, bool on)
+    {
+        sending = true;
+        try
+        {
+            await ApiClient.ControlClimateDeviceAsync(new ClimateControlRequestDto { EntityId = id, PowerOn = on });
+            await Task.Delay(400);
+            await LoadAsync();
+        }
+        catch (Exception ex) { statusMessage = ex.Message; }
+        finally { sending = false; }
+    }
+
+    private void StartRefreshLoop()
+    {
+        timerCts = new CancellationTokenSource();
+        timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (timer is not null && await timer.WaitForNextTickAsync(timerCts.Token))
+                {
+                    await InvokeAsync(LoadAsync);
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, timerCts.Token);
+    }
+
+    private static string ModeLabel(string mode) => mode switch
+    {
+        "cool" => "❄️ Холод",
+        "heat" => "🔥 Тепло",
+        "auto" => "⚡ Авто",
+        "dry" => "💧 Осушення",
+        "fan_only" => "🌀 Вент.",
+        "off" => "⛔ Вимк.",
+        _ => mode
+    };
+}

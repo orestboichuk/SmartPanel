@@ -1,0 +1,1316 @@
+﻿@page "/rooms"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@using System.Globalization
+@implements IDisposable
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+
+<PageTitle>Rooms</PageTitle>
+
+<section class="page-shell rooms-neo">
+    <header class="page-header neo-header">
+        <div>
+            <h1>Rooms Command Grid</h1>
+            <p class="page-subtitle">Live grouped devices, type-aware details and direct control from one page.</p>
+        </div>
+        <div class="control-row">
+            <button type="button" class="scene-btn" disabled="@refreshingRooms" @onclick="ReloadRoomsAsync">Scan now</button>
+            <span class="sensor-updated">Last scan: @lastRoomsScanAt.ToString("HH:mm:ss")</span>
+        </div>
+    </header>
+
+    <div class="neo-room-overview">
+        @foreach (var item in RoomOverview)
+        {
+            <div class="card neo-card neo-room-overview-item">
+                <span class="stat-label">@item.Name</span>
+                <strong class="stat-value">@item.Online/@item.Total</strong>
+                <span class="sensor-updated">@FormatNullable(item.Temp, " C")</span>
+            </div>
+        }
+    </div>
+
+    <div class="card filter-panel neo-card">
+        <div class="filter-grid">
+            <div class="filter-group">
+                <label for="search">Search</label>
+                <input id="search" class="input-control" placeholder="Room or device name..." @bind="searchText" />
+            </div>
+            <div class="filter-group">
+                <label for="status">Status</label>
+                <select id="status" class="input-control" @bind="statusFilter">
+                    <option value="all">All</option>
+                    <option value="online">Online only</option>
+                    <option value="offline">Offline only</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="hours">History Range</label>
+                <select id="hours" class="input-control" @bind="historyHours">
+                    <option value="6">6h</option>
+                    <option value="12">12h</option>
+                    <option value="24">24h</option>
+                    <option value="48">48h</option>
+                </select>
+            </div>
+            <div class="filter-group summary-block">
+                <span>Visible Devices</span>
+                <strong>@FilteredRooms.Sum(r => r.Sensors.Count)</strong>
+            </div>
+        </div>
+    </div>
+
+    @if (rooms is null)
+    {
+        <div class="card">Loading rooms...</div>
+    }
+    else
+    {
+        <div class="analytics-grid neo-analytics-grid">
+            <article class="card neo-card">
+                <div class="section-title-row">
+                    <h2>Device Type Distribution</h2>
+                </div>
+                <div class="bars-list">
+                    @foreach (var item in TypeDistribution)
+                    {
+                        <div class="bar-row">
+                            <span class="bar-label">@item.Key</span>
+                            <div class="bar-track">
+                                <div class="bar-fill warm" style="@GetWidthStyle(item.Value, MaxTypeCount)"></div>
+                            </div>
+                            <strong class="bar-value">@item.Value</strong>
+                        </div>
+                    }
+                </div>
+            </article>
+
+            <article class="card sensor-details-card neo-card">
+                <div class="section-title-row">
+                    <h2>Device Details</h2>
+                </div>
+                @if (loadingDetails)
+                {
+                    <p class="page-subtitle">Loading device details...</p>
+                }
+                else if (!string.IsNullOrWhiteSpace(detailsError))
+                {
+                    <p class="page-subtitle">@detailsError</p>
+                }
+                else if (selectedDetails is null)
+                {
+                    <p class="page-subtitle">Select a device to inspect details.</p>
+                }
+                else
+                {
+                    <div class="detail-tabs">
+                        <button type="button" class="scene-btn @(detailsTab == "details" ? "scene-btn-active" : "")" @onclick="SelectDetailsTab">Details</button>
+                        <button type="button" class="scene-btn @(detailsTab == "logs" ? "scene-btn-active" : "")" @onclick="SelectLogsTab">Logs</button>
+                    </div>
+
+                    @if (detailsTab == "details")
+                    {
+                        <div class="detail-grid">
+                            <div class="metric-row"><span>Name</span><strong>@selectedDetails.DisplayName</strong></div>
+                            <div class="metric-row"><span>Original</span><strong>@selectedDetails.OriginalName</strong></div>
+                            <div class="metric-row"><span>Room</span><strong>@selectedDetails.RoomName</strong></div>
+                            <div class="metric-row"><span>State</span><strong>@selectedDetails.DisplayState</strong></div>
+                            <div class="metric-row"><span>Current</span><strong>@FormatCurrentValue(selectedDetails)</strong></div>
+                            @if (selectedDetails.Type == "environment" && selectedDetails.HumidityValue.HasValue)
+                            {
+                                <div class="metric-row"><span>Humidity</span><strong>@FormatNumber(selectedDetails.HumidityValue) @selectedDetails.HumidityUnit</strong></div>
+                            }
+                            @if (selectedDetails.BatteryLevel.HasValue)
+                            {
+                                <div class="metric-row"><span>Battery</span><strong>@FormatBattery(selectedDetails.BatteryLevel)</strong></div>
+                            }
+                            <div class="metric-row"><span>Requested At</span><strong>@selectedDetails.RequestedAt.ToString("HH:mm:ss")</strong></div>
+                        </div>
+
+                        <div class="rename-panel">
+                            <label class="rename-label" for="display-name-input">Display name</label>
+                            <div class="control-row rename-row">
+                                <input id="display-name-input"
+                                       class="input-control rename-input"
+                                       placeholder="@selectedDetails.OriginalName"
+                                       @bind="displayNameInput" />
+                                <button type="button" class="scene-btn" disabled="@savingDisplayName" @onclick="SaveDisplayNameAsync">Save</button>
+                                <button type="button" class="scene-btn" disabled="@savingDisplayName" @onclick="ResetDisplayNameAsync">Reset</button>
+                            </div>
+                            <div class="sensor-updated">Stored only in SmartPanel DB. Home Assistant keeps the original device name.</div>
+                            @if (!string.IsNullOrWhiteSpace(displayNameMessage))
+                            {
+                                <div class="status-banner rename-status">@displayNameMessage</div>
+                            }
+                        </div>
+
+                        @if (selectedDetails.Type == "climate")
+                        {
+                            <div class="climate-panel">
+                                <div class="metric-row">
+                                    <span>Mode</span>
+                                    <strong>@(selectedDetails.CurrentMode ?? "unknown")</strong>
+                                </div>
+                                <div class="metric-row">
+                                    <span>Target</span>
+                                    <strong>@(selectedDetails.TargetTemperature?.ToString("0.#") ?? "-") C</strong>
+                                </div>
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="SendClimatePowerOn">Power On</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => SendClimateCommand(powerOn: false)">Power Off</button>
+                                </div>
+
+                                <div class="control-row">
+                                    @foreach (var mode in ClimateModes)
+                                    {
+                                        <button type="button"
+                                                class="scene-btn @(IsModeActive(mode) ? "scene-btn-active" : "")"
+                                                disabled="@sendingClimate"
+                                                @onclick="() => SendClimateCommand(mode: mode)">
+                                            @mode
+                                        </button>
+                                    }
+                                </div>
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => ChangeTarget(-0.5)">-0.5</button>
+                                    <input type="number" class="input-control climate-input" step="0.5" @bind="climateTargetInput" />
+                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => ChangeTarget(0.5)">+0.5</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => SendClimateCommand(target: climateTargetInput)">Apply</button>
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(climateMessage))
+                                {
+                                    <div class="status-banner">@climateMessage</div>
+                                }
+                            </div>
+                        }
+
+                        @if (selectedDetails.Domain == "media_player")
+                        {
+                            <div class="climate-panel">
+                                <div class="metric-row">
+                                    <span>HA domain</span>
+                                    <strong>@selectedDetails.Domain</strong>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(selectedDetails.Source))
+                                {
+                                    <div class="metric-row">
+                                        <span>Source</span>
+                                        <strong>@selectedDetails.Source</strong>
+                                    </div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(selectedDetails.App))
+                                {
+                                    <div class="metric-row">
+                                        <span>App</span>
+                                        <strong>@selectedDetails.App</strong>
+                                    </div>
+                                }
+                                @if (selectedDetails.VolumePercent.HasValue)
+                                {
+                                    <div class="metric-row">
+                                        <span>Volume</span>
+                                        <strong>@selectedDetails.VolumePercent%</strong>
+                                    </div>
+                                }
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(powerOn: true)">Power On</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(powerOn: false)">Power Off</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(togglePlayPause: true)">Play/Pause</button>
+                                </div>
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(volumeDown: true)">Vol -</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(volumeUp: true)">Vol +</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(mute: true)">Mute</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(mute: false)">Unmute</button>
+                                </div>
+
+                                @if (selectedDetails.AvailableSources.Count > 0)
+                                {
+                                    <div class="control-row">
+                                        <select class="input-control tv-source-select" @bind="selectedTvSource">
+                                            @foreach (var source in selectedDetails.AvailableSources)
+                                            {
+                                                <option value="@source">@source</option>
+                                            }
+                                        </select>
+                                        <button type="button" class="scene-btn" disabled="@sendingTv" @onclick="() => SendTvCommandAsync(source: selectedTvSource)">Set Source</button>
+                                    </div>
+                                }
+
+                                @if (!string.IsNullOrWhiteSpace(tvMessage))
+                                {
+                                    <div class="status-banner">@tvMessage</div>
+                                }
+                            </div>
+                        }
+
+                        @if (selectedDetails.Domain == "camera")
+                        {
+                            <div class="climate-panel">
+                                <div class="metric-row">
+                                    <span>HA domain</span>
+                                    <strong>@selectedDetails.Domain</strong>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(selectedDetails.DeviceClass))
+                                {
+                                    <div class="metric-row">
+                                        <span>Device class</span>
+                                        <strong>@selectedDetails.DeviceClass</strong>
+                                    </div>
+                                }
+                                @if (selectedDetails.Capabilities.Count > 0)
+                                {
+                                    <div class="metric-row">
+                                        <span>Capabilities</span>
+                                        <strong>@string.Join(", ", selectedDetails.Capabilities)</strong>
+                                    </div>
+                                }
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("up")'>Up</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("down")'>Down</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("left")'>Left</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("right")'>Right</button>
+                                </div>
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("zoom_in")'>Zoom +</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("zoom_out")'>Zoom -</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("start_recording")'>Record</button>
+                                </div>
+
+                                <div class="control-row">
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("enable_motion_detection")'>Motion On</button>
+                                    <button type="button" class="scene-btn" disabled="@sendingCamera" @onclick='() => SendCameraCommandAsync("disable_motion_detection")'>Motion Off</button>
+                                    <a href="@GetCameraSnapshotUrl(selectedDetails.EntityId)" target="_blank" class="scene-btn camera-link-btn">Snapshot</a>
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(cameraMessage))
+                                {
+                                    <div class="status-banner">@cameraMessage</div>
+                                }
+                            </div>
+                        }
+
+                        @if (selectedDetails.Type == "environment" && EnvironmentCharts.Count > 0)
+                        {
+                            <div class="chart-grid">
+                                @foreach (var chart in EnvironmentCharts)
+                                {
+                                    <section class="chart-panel">
+                                        <div class="chart-panel-header">
+                                            <strong>@chart.Title</strong>
+                                            <span>@chart.CurrentLabel</span>
+                                        </div>
+                                        <svg class="history-chart detailed-chart" viewBox="0 0 320 160" preserveAspectRatio="none" role="img" aria-label="@chart.Title history chart">
+                                            @foreach (var gridLine in ChartGridLines)
+                                            {
+                                                <line x1="40" y1="@FormatSvg(gridLine)" x2="304" y2="@FormatSvg(gridLine)" class="chart-grid-line" />
+                                            }
+                                            <polyline fill="none" stroke="@chart.Stroke" stroke-width="3" points="@chart.Polyline" />
+                                            @foreach (var zone in chart.Zones)
+                                            {
+                                                <rect x="@FormatSvg(zone.X)" y="12" width="@FormatSvg(zone.Width)" height="112" class="chart-hover-zone">
+                                                    <title>@zone.Tooltip</title>
+                                                </rect>
+                                            }
+                                            @foreach (var point in chart.Points)
+                                            {
+                                                <circle cx="@FormatSvg(point.X)" cy="@FormatSvg(point.Y)" r="3.4" fill="@chart.Stroke" class="chart-point">
+                                                    <title>@point.Tooltip</title>
+                                                </circle>
+                                            }
+                                        </svg>
+                                        <div class="chart-axis-row">
+                                            <span>@chart.StartLabel</span>
+                                            <span>@chart.EndLabel</span>
+                                        </div>
+                                        <div class="metric-row">
+                                            <span>Min/Max</span>
+                                            <strong>@chart.MinLabel / @chart.MaxLabel</strong>
+                                        </div>
+                                    </section>
+                                }
+                            </div>
+                        }
+                        else if (NumericHistoryPoints.Count >= 2)
+                        {
+                            <svg class="history-chart" viewBox="0 0 300 120" preserveAspectRatio="none" role="img" aria-label="Device history chart">
+                                <polyline fill="none" stroke="var(--primary)" stroke-width="2.5" points="@BuildSparkline(NumericHistoryPoints)" />
+                            </svg>
+                            <div class="metric-row">
+                                <span>Min/Max</span>
+                                <strong>@GetMinMaxLabel(NumericHistoryPoints, selectedDetails.Unit)</strong>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        @if (selectedDetails.Type != "motion" && selectedDetails.Type != "door")
+                        {
+                            <p class="page-subtitle">Logs are enabled for motion and door devices.</p>
+                        }
+                        else if (selectedDetails.Type == "motion" && motionDebug is not null)
+                        {
+                            <div class="motion-live-banner @(IsMotionActive ? "motion-live-on" : "motion-live-off")">
+                                <strong>@(IsMotionActive ? "РУХ ЗАРАЗ" : "Руху немає")</strong>
+                                <span class="log-time">Last changed: @(motionDebug.LastChanged?.ToString("dd.MM HH:mm:ss") ?? "n/a")</span>
+                            </div>
+                            <div class="motion-debug-meta">
+                                <span>state: @motionDebug.CurrentState</span>
+                                <span>last_updated: @(motionDebug.LastUpdated?.ToString("dd.MM HH:mm:ss") ?? "n/a")</span>
+                                <span>last_reported: @(motionDebug.LastReported?.ToString("dd.MM HH:mm:ss") ?? "n/a")</span>
+                            </div>
+                        }
+                        else if (selectedDetails.Type == "motion" && MotionLogs.Count == 0)
+                        {
+                            <p class="page-subtitle">No motion events for selected period.</p>
+                        }
+                        else if (selectedDetails.Type == "motion")
+                        {
+                            <div class="logs-list">
+                                @foreach (var item in MotionLogs)
+                                {
+                                    <div class="log-item">
+                                        <strong>Виявлено рух</strong>
+                                        <span class="log-time">@item.ToString("dd.MM HH:mm:ss")</span>
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else if (DoorLogs.Count == 0)
+                        {
+                            <p class="page-subtitle">No door open/close events for selected period.</p>
+                        }
+                        else
+                        {
+                            <div class="logs-list">
+                                @foreach (var entry in DoorLogs)
+                                {
+                                    <div class="log-item door-log-item">
+                                        <div class="log-stack">
+                                            <strong>Відкрито</strong>
+                                            <span class="log-time">@(entry.OpenedAt?.ToString("dd.MM HH:mm:ss") ?? "поза періодом")</span>
+                                        </div>
+                                        <div class="log-stack">
+                                            <strong>@(entry.ClosedAt.HasValue ? "Закрито" : "Ще відкрито")</strong>
+                                            <span class="log-time">@(entry.ClosedAt?.ToString("dd.MM HH:mm:ss") ?? "зараз")</span>
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                }
+            </article>
+        </div>
+
+        @if (FilteredRooms.Count == 0)
+        {
+            <div class="card">No devices match your filters.</div>
+        }
+        else
+        {
+            <div class="rooms-grid neo-rooms-grid">
+                @foreach (var room in FilteredRooms)
+                {
+                    <article class="room-card neo-room-card">
+                        <div class="room-card-header">
+                            <div>
+                                <h3>@room.Name</h3>
+                                <span class="sensor-count">@room.Sensors.Count devices</span>
+                            </div>
+                            <div class="neo-room-card-temp">@FormatNullable(GetRoomAverageTemp(room), " C")</div>
+                        </div>
+
+                        <div class="sensor-list">
+                            @foreach (var sensor in room.Sensors)
+                            {
+                                <button type="button"
+                                        class="sensor-item sensor-button @(selectedDetails?.EntityId == sensor.Id ? "sensor-selected" : "")"
+                                        @onclick="() => LoadSensorDetails(sensor.Id)">
+                                    <div class="sensor-top">
+                                        <span class="sensor-name">@sensor.Name</span>
+                                        <span class="sensor-status @(sensor.Online ? "status-online" : "status-offline")">
+                                            @(sensor.Online ? "Online" : "Offline")
+                                        </span>
+                                    </div>
+
+                                    <div class="sensor-meta">
+                                        <span class="sensor-type">@FormatDeviceType(sensor.Type)</span>
+                                        @if (sensor.Value.HasValue)
+                                        {
+                                            <span class="sensor-value">@sensor.Value @sensor.Unit</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="sensor-value">@sensor.Status</span>
+                                        }
+                                    </div>
+
+                                    <div class="sensor-updated">Updated @sensor.UpdatedAt.ToString("HH:mm:ss")</div>
+                                </button>
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+    }
+</section>
+
+@code {
+    private List<RoomDto>? rooms;
+    private string searchText = string.Empty;
+    private string statusFilter = "all";
+    private int historyHours = 24;
+    private bool loadingDetails;
+    private string? detailsError;
+    private SensorDetailsDto? selectedDetails;
+    private bool sendingClimate;
+    private string? climateMessage;
+    private double? climateTargetInput;
+    private bool sendingTv;
+    private string? tvMessage;
+    private string? selectedTvSource;
+    private bool sendingCamera;
+    private string? cameraMessage;
+    private string displayNameInput = string.Empty;
+    private bool savingDisplayName;
+    private string? displayNameMessage;
+    private bool refreshingRooms;
+    private string detailsTab = "details";
+    private readonly List<DateTime> motionLiveEvents = [];
+    private string? lastMotionState;
+    private MotionDebugDto? motionDebug;
+    private DateTime lastRoomsScanAt = DateTime.Now;
+    private PeriodicTimer? roomsScanTimer;
+    private CancellationTokenSource? roomsScanLoopCts;
+
+    private List<SensorHistoryPointDto> NumericHistoryPoints => GetNumericHistoryPoints();
+    private List<ChartModel> EnvironmentCharts => GetEnvironmentCharts();
+    private static readonly double[] ChartGridLines = [20, 48, 76, 104];
+
+    private List<(string Name, int Online, int Total, double? Temp)> RoomOverview =>
+        FilteredRooms
+            .Select(r =>
+                (
+                    Name: r.Name,
+                    Online: r.Sensors.Count(s => s.Online),
+                    Total: r.Sensors.Count,
+                    Temp: GetRoomAverageTemp(r)
+                ))
+            .OrderByDescending(x => x.Online)
+            .ThenBy(x => x.Name)
+            .Take(6)
+            .ToList();
+
+    private List<string> ClimateModes =>
+        selectedDetails?.AvailableModes.Count > 0
+            ? selectedDetails.AvailableModes
+            : ["off", "cool", "heat", "fan_only", "dry", "auto"];
+
+    private List<RoomDto> FilteredRooms
+    {
+        get
+        {
+            if (rooms is null)
+            {
+                return [];
+            }
+
+            var result = new List<RoomDto>();
+            foreach (var room in rooms)
+            {
+                var roomMatches = RoomMatchesSearch(room.Name);
+                var sensorsByStatus = room.Sensors.Where(MatchesStatus).ToList();
+                var sensorsBySearch = sensorsByStatus.Where(MatchesSearchText).ToList();
+
+                if (sensorsBySearch.Count == 0 && !roomMatches)
+                {
+                    continue;
+                }
+
+                result.Add(new RoomDto
+                {
+                    Id = room.Id,
+                    Name = room.Name,
+                    Sensors = sensorsBySearch.Count > 0 ? sensorsBySearch : sensorsByStatus
+                });
+            }
+
+            return result;
+        }
+    }
+
+    private Dictionary<string, int> TypeDistribution =>
+        FilteredRooms
+            .SelectMany(r => r.Sensors)
+            .GroupBy(s => s.Type)
+            .OrderByDescending(g => g.Count())
+            .ToDictionary(g => g.Key, g => g.Count());
+
+    private int MaxTypeCount => TypeDistribution.Count == 0 ? 1 : TypeDistribution.Values.Max();
+    private List<DateTime> MotionLogs => GetMotionLogs();
+    private List<DoorLogEntry> DoorLogs => GetDoorLogs();
+    private bool IsMotionActive => IsMotionDetectedState(motionDebug?.CurrentState ?? selectedDetails?.RawState);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadRoomsAsync();
+        StartRoomsScanLoop();
+    }
+
+    public void Dispose()
+    {
+        roomsScanLoopCts?.Cancel();
+        roomsScanLoopCts?.Dispose();
+        roomsScanTimer?.Dispose();
+    }
+
+    private async Task LoadSensorDetails(string sensorId)
+    {
+        loadingDetails = true;
+        detailsError = null;
+        climateMessage = null;
+        tvMessage = null;
+        cameraMessage = null;
+        displayNameMessage = null;
+
+        try
+        {
+            selectedDetails = await ApiClient.GetSensorDetailsAsync(sensorId, historyHours);
+            if (selectedDetails is null)
+            {
+                detailsError = "Device not found in API.";
+                return;
+            }
+
+            detailsTab = "details";
+            TrackMotionEvent(selectedDetails, reset: true);
+            await LoadMotionDebugAsync(selectedDetails);
+            climateTargetInput = selectedDetails.TargetTemperature ?? selectedDetails.CurrentValue;
+            SyncDisplayNameInput();
+            SyncDeviceControlState();
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"Load error: {ex.Message}";
+        }
+        finally
+        {
+            loadingDetails = false;
+        }
+    }
+
+    private async Task SendClimateCommand(bool? powerOn = null, string? mode = null, double? target = null)
+    {
+        if (selectedDetails is null || selectedDetails.Type != "climate")
+        {
+            return;
+        }
+
+        sendingClimate = true;
+        climateMessage = null;
+        detailsError = null;
+
+        try
+        {
+            await ApiClient.ControlClimateAsync(new ClimateControlRequestDto
+            {
+                EntityId = selectedDetails.EntityId,
+                PowerOn = powerOn,
+                HvacMode = mode,
+                TargetTemperature = target
+            });
+
+            climateMessage = "Command sent.";
+            await RefreshSelectedDetails();
+            await ReloadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"Control error: {ex.Message}";
+        }
+        finally
+        {
+            sendingClimate = false;
+        }
+    }
+
+    private async Task RefreshSelectedDetails()
+    {
+        if (selectedDetails is null)
+        {
+            return;
+        }
+
+        selectedDetails = await ApiClient.GetSensorDetailsAsync(selectedDetails.EntityId, historyHours);
+        TrackMotionEvent(selectedDetails);
+        await LoadMotionDebugAsync(selectedDetails);
+        climateTargetInput = selectedDetails?.TargetTemperature ?? selectedDetails?.CurrentValue;
+        SyncDisplayNameInput();
+        SyncDeviceControlState();
+    }
+
+    private async Task SaveDisplayNameAsync()
+    {
+        if (selectedDetails is null)
+        {
+            return;
+        }
+
+        savingDisplayName = true;
+        detailsError = null;
+        displayNameMessage = null;
+
+        try
+        {
+            var result = await ApiClient.UpdateDeviceDisplayNameAsync(new DeviceDisplayNameRequestDto
+            {
+                EntityId = selectedDetails.EntityId,
+                DisplayName = displayNameInput
+            });
+
+            if (result is null)
+            {
+                detailsError = "Rename failed: device not found.";
+                return;
+            }
+
+            displayNameMessage = "Display name updated.";
+            await ReloadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"Rename error: {ex.Message}";
+        }
+        finally
+        {
+            savingDisplayName = false;
+        }
+    }
+
+    private Task ResetDisplayNameAsync()
+    {
+        displayNameInput = string.Empty;
+        return SaveDisplayNameAsync();
+    }
+
+    private void SyncDisplayNameInput()
+    {
+        displayNameInput = selectedDetails?.DisplayNameOverride ?? string.Empty;
+    }
+
+    private void SyncDeviceControlState()
+    {
+        selectedTvSource = selectedDetails?.Source ?? selectedDetails?.AvailableSources.FirstOrDefault();
+    }
+
+    private async Task SendTvCommandAsync(
+        bool? powerOn = null,
+        bool? togglePlayPause = null,
+        bool? volumeUp = null,
+        bool? volumeDown = null,
+        bool? mute = null,
+        string? source = null)
+    {
+        if (selectedDetails?.Domain != "media_player")
+        {
+            return;
+        }
+
+        sendingTv = true;
+        detailsError = null;
+        tvMessage = null;
+
+        try
+        {
+            await ApiClient.ControlTvAsync(new TvControlRequestDto
+            {
+                EntityId = selectedDetails.EntityId,
+                PowerOn = powerOn,
+                TogglePlayPause = togglePlayPause,
+                VolumeUp = volumeUp,
+                VolumeDown = volumeDown,
+                Mute = mute,
+                Source = source
+            });
+
+            tvMessage = "TV command sent.";
+            await RefreshSelectedDetails();
+            await ReloadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"TV control error: {ex.Message}";
+        }
+        finally
+        {
+            sendingTv = false;
+        }
+    }
+
+    private async Task SendCameraCommandAsync(string command)
+    {
+        if (selectedDetails?.Domain != "camera")
+        {
+            return;
+        }
+
+        sendingCamera = true;
+        detailsError = null;
+        cameraMessage = null;
+
+        try
+        {
+            await ApiClient.ControlCameraAsync(new CameraControlRequestDto
+            {
+                EntityId = selectedDetails.EntityId,
+                Command = command
+            });
+
+            cameraMessage = "Camera command sent.";
+            await RefreshSelectedDetails();
+            await ReloadRoomsAsync();
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"Camera control error: {ex.Message}";
+        }
+        finally
+        {
+            sendingCamera = false;
+        }
+    }
+
+    private static string GetCameraSnapshotUrl(string entityId)
+    {
+        return $"api/cameras/snapshot?entityId={Uri.EscapeDataString(entityId)}";
+    }
+
+    private async Task SendClimatePowerOn()
+    {
+        var preferredMode = GetPreferredOnMode();
+        await SendClimateCommand(powerOn: true, mode: preferredMode);
+    }
+
+    private void ChangeTarget(double delta)
+    {
+        climateTargetInput ??= selectedDetails?.TargetTemperature ?? selectedDetails?.CurrentValue ?? 22;
+        climateTargetInput += delta;
+    }
+
+    private bool IsModeActive(string mode)
+    {
+        return selectedDetails?.CurrentMode is not null &&
+               selectedDetails.CurrentMode.Equals(mode, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SelectDetailsTab()
+    {
+        detailsTab = "details";
+    }
+
+    private void SelectLogsTab()
+    {
+        detailsTab = "logs";
+    }
+
+    private string? GetPreferredOnMode()
+    {
+        if (selectedDetails is null)
+        {
+            return null;
+        }
+
+        var current = selectedDetails.CurrentMode;
+        if (!string.IsNullOrWhiteSpace(current) && !current.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            return current;
+        }
+
+        var modes = ClimateModes;
+        var preferred = modes.FirstOrDefault(m => m.Equals("cool", StringComparison.OrdinalIgnoreCase))
+            ?? modes.FirstOrDefault(m => m.Equals("auto", StringComparison.OrdinalIgnoreCase))
+            ?? modes.FirstOrDefault(m => !m.Equals("off", StringComparison.OrdinalIgnoreCase));
+
+        return preferred;
+    }
+
+    private bool MatchesStatus(SensorDto sensor)
+    {
+        return statusFilter switch
+        {
+            "online" => sensor.Online,
+            "offline" => !sensor.Online,
+            _ => true
+        };
+    }
+
+    private bool MatchesSearchText(SensorDto sensor)
+    {
+        if (string.IsNullOrWhiteSpace(searchText))
+        {
+            return true;
+        }
+
+        return sensor.Name.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+               sensor.Type.Contains(searchText, StringComparison.OrdinalIgnoreCase) ||
+               sensor.Id.Contains(searchText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool RoomMatchesSearch(string roomName)
+    {
+        return !string.IsNullOrWhiteSpace(searchText) &&
+               roomName.Contains(searchText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetWidthStyle(int value, int maxValue)
+    {
+        var width = maxValue == 0 ? 0 : (double)value / maxValue * 100;
+        var widthText = Math.Clamp(width, 6, 100).ToString("0.###", CultureInfo.InvariantCulture);
+        return $"width: {widthText}%";
+    }
+
+    private static string BuildSparkline(List<SensorHistoryPointDto> points)
+    {
+        var orderedPoints = points
+            .OrderBy(x => x.Timestamp)
+            .GroupBy(x => x.Timestamp)
+            .Select(g => g.Last())
+            .ToList();
+
+        var values = orderedPoints.Select(x => x.Value!.Value).ToList();
+        var min = values.Min();
+        var max = values.Max();
+        var span = Math.Max(max - min, 0.001);
+        var minTime = orderedPoints.Min(x => x.Timestamp);
+        var maxTime = orderedPoints.Max(x => x.Timestamp);
+        var totalSeconds = Math.Max((maxTime - minTime).TotalSeconds, 1);
+
+        var segments = new List<string>();
+        for (var i = 0; i < orderedPoints.Count; i++)
+        {
+            var timeOffset = (orderedPoints[i].Timestamp - minTime).TotalSeconds;
+            var x = timeOffset / totalSeconds * 300.0;
+            var normalized = (values[i] - min) / span;
+            var y = 110 - normalized * 100;
+            var xText = x.ToString("0.###", CultureInfo.InvariantCulture);
+            var yText = y.ToString("0.###", CultureInfo.InvariantCulture);
+            segments.Add($"{xText},{yText}");
+        }
+
+        return string.Join(" ", segments);
+    }
+
+    private List<ChartModel> GetEnvironmentCharts()
+    {
+        if (selectedDetails?.Type != "environment")
+        {
+            return [];
+        }
+
+        var result = new List<ChartModel>();
+        var temperatureChart = BuildChartModel(
+            selectedDetails.TemperatureHistory,
+            "Temperature",
+            selectedDetails.Unit,
+            "var(--primary)");
+        var humidityChart = BuildChartModel(
+            selectedDetails.HumidityHistory,
+            "Humidity",
+            selectedDetails.HumidityUnit ?? "%",
+            "#f0b13a");
+
+        if (temperatureChart is not null)
+        {
+            result.Add(temperatureChart);
+        }
+
+        if (humidityChart is not null)
+        {
+            result.Add(humidityChart);
+        }
+
+        return result;
+    }
+
+    private static ChartModel? BuildChartModel(
+        List<SensorHistoryPointDto>? sourcePoints,
+        string title,
+        string? unit,
+        string stroke)
+    {
+        if (sourcePoints is null)
+        {
+            return null;
+        }
+
+        var points = sourcePoints
+            .Where(x => x.Value.HasValue && !double.IsNaN(x.Value.Value) && !double.IsInfinity(x.Value.Value))
+            .OrderBy(x => x.Timestamp)
+            .GroupBy(x => x.Timestamp)
+            .Select(g => g.Last())
+            .ToList();
+
+        if (points.Count < 2)
+        {
+            return null;
+        }
+
+        const double chartLeft = 40;
+        const double chartRight = 304;
+        const double chartTop = 16;
+        const double chartBottom = 116;
+
+        var values = points.Select(x => x.Value!.Value).ToList();
+        var min = values.Min();
+        var max = values.Max();
+        var span = Math.Max(max - min, 0.001);
+        var minTime = points.Min(x => x.Timestamp);
+        var maxTime = points.Max(x => x.Timestamp);
+        var totalSeconds = Math.Max((maxTime - minTime).TotalSeconds, 1);
+
+        var chartPoints = new List<ChartPoint>();
+        for (var index = 0; index < points.Count; index++)
+        {
+            var item = points[index];
+            var timeOffset = (item.Timestamp - minTime).TotalSeconds;
+            var x = chartLeft + timeOffset / totalSeconds * (chartRight - chartLeft);
+            var normalized = (item.Value!.Value - min) / span;
+            var y = chartBottom - normalized * (chartBottom - chartTop);
+            chartPoints.Add(new ChartPoint(
+                x,
+                y,
+                item.Timestamp,
+                item.Value.Value,
+                $"{item.Timestamp:dd.MM HH:mm} | {FormatNumber(item.Value)} {unit}".Trim()));
+        }
+
+        var polyline = string.Join(" ", chartPoints.Select(x => $"{FormatSvg(x.X)},{FormatSvg(x.Y)}"));
+        var zones = new List<ChartHoverZone>();
+        for (var index = 0; index < chartPoints.Count; index++)
+        {
+            var previousX = index == 0 ? chartLeft : (chartPoints[index - 1].X + chartPoints[index].X) / 2.0;
+            var nextX = index == chartPoints.Count - 1 ? chartRight : (chartPoints[index].X + chartPoints[index + 1].X) / 2.0;
+            zones.Add(new ChartHoverZone(previousX, Math.Max(nextX - previousX, 6), chartPoints[index].Tooltip));
+        }
+
+        return new ChartModel(
+            title,
+            unit ?? string.Empty,
+            stroke,
+            chartPoints,
+            zones,
+            polyline,
+            $"{FormatNumber(chartPoints.Last().Value)} {unit}".Trim(),
+            $"{FormatNumber(min)} {unit}".Trim(),
+            $"{FormatNumber(max)} {unit}".Trim(),
+            minTime.ToString("HH:mm"),
+            maxTime.ToString("HH:mm"));
+    }
+
+    private static string FormatSvg(double value)
+    {
+        return value.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    private static string GetMinMaxLabel(List<SensorHistoryPointDto> points, string unit)
+    {
+        var values = points.Select(x => x.Value!.Value).ToList();
+        return $"{values.Min():0.#}{unit} / {values.Max():0.#}{unit}";
+    }
+
+    private static string FormatCurrentValue(SensorDetailsDto details)
+    {
+        return details.CurrentValue.HasValue
+            ? $"{details.CurrentValue.Value:0.##} {details.Unit}".Trim()
+            : details.DisplayState;
+    }
+
+    private static string FormatNumber(double? value)
+    {
+        return value?.ToString("0.#", CultureInfo.GetCultureInfo("uk-UA")) ?? "N/A";
+    }
+
+    private static string FormatBattery(double? value)
+    {
+        return value.HasValue ? $"{FormatNumber(value)} %" : "N/A";
+    }
+
+    private static string FormatDeviceType(string type)
+    {
+        return type switch
+        {
+            "media" => "TV",
+            "camera" => "Camera",
+            "climate" => "Climate",
+            "environment" => "Environment",
+            "door" => "Door",
+            "motion" => "Motion",
+            "leak" => "Leak",
+            _ => type
+        };
+    }
+
+    private static string FormatNullable(double? value, string suffix)
+    {
+        return value.HasValue ? $"{value.Value:0.#}{suffix}" : "N/A";
+    }
+
+    private static double? GetRoomAverageTemp(RoomDto room)
+    {
+        var values = room.Sensors
+            .Where(s =>
+                s.Value.HasValue &&
+                (s.Type == "temp" || s.Type == "environment") &&
+                (s.Unit.Contains("C", StringComparison.OrdinalIgnoreCase) || s.Unit.Contains("°", StringComparison.OrdinalIgnoreCase)))
+            .Select(s => s.Value!.Value)
+            .ToList();
+        return values.Count == 0 ? null : values.Average();
+    }
+
+    private List<SensorHistoryPointDto> GetNumericHistoryPoints()
+    {
+        if (selectedDetails?.History is null)
+        {
+            return [];
+        }
+
+        return selectedDetails.History
+            .Where(x => x.Value.HasValue && !double.IsNaN(x.Value.Value) && !double.IsInfinity(x.Value.Value))
+            .OrderBy(x => x.Timestamp)
+            .GroupBy(x => x.Timestamp)
+            .Select(g => g.Last())
+            .ToList();
+    }
+
+    private List<DateTime> GetMotionLogs()
+    {
+        if (selectedDetails?.Type != "motion")
+        {
+            return [];
+        }
+
+        var historyEvents = selectedDetails.History is null
+            ? []
+            : selectedDetails.History
+                .Where(x => IsMotionDetectedState(x.State))
+                .Select(x => x.Timestamp)
+                .ToList();
+
+        var debugEvents = motionDebug?.HistoryPoints is null
+            ? []
+            : motionDebug.HistoryPoints
+                .Where(x => IsMotionDetectedState(x.State))
+                .Select(x => x.Timestamp)
+                .ToList();
+
+        return historyEvents
+            .Concat(debugEvents)
+            .Concat(motionLiveEvents)
+            .Distinct()
+            .OrderByDescending(x => x)
+            .ToList();
+    }
+
+    private List<DoorLogEntry> GetDoorLogs()
+    {
+        if (selectedDetails?.Type != "door" || selectedDetails.History is null)
+        {
+            return [];
+        }
+
+        var orderedEvents = selectedDetails.History
+            .OrderBy(x => x.Timestamp)
+            .GroupBy(x => x.Timestamp)
+            .Select(g => g.Last())
+            .Where(x => IsDoorOpenState(x.State) || IsDoorClosedState(x.State))
+            .ToList();
+
+        if (orderedEvents.Count == 0)
+        {
+            return [];
+        }
+
+        var result = new List<DoorLogEntry>();
+        DateTime? openedAt = null;
+
+        foreach (var item in orderedEvents)
+        {
+            if (IsDoorOpenState(item.State))
+            {
+                openedAt = item.Timestamp;
+                continue;
+            }
+
+            if (openedAt.HasValue)
+            {
+                result.Add(new DoorLogEntry(openedAt.Value, item.Timestamp));
+                openedAt = null;
+            }
+            else
+            {
+                result.Add(new DoorLogEntry(null, item.Timestamp));
+            }
+        }
+
+        if (openedAt.HasValue)
+        {
+            result.Add(new DoorLogEntry(openedAt.Value, null));
+        }
+
+        return result
+            .OrderByDescending(x => x.OpenedAt ?? x.ClosedAt ?? DateTime.MinValue)
+            .ToList();
+    }
+
+    private void TrackMotionEvent(SensorDetailsDto? details, bool reset = false)
+    {
+        if (reset)
+        {
+            motionLiveEvents.Clear();
+            lastMotionState = null;
+        }
+
+        if (details?.Type != "motion")
+        {
+            return;
+        }
+
+        var currentState = string.IsNullOrWhiteSpace(details.RawState)
+            ? details.DisplayState
+            : details.RawState;
+
+        var isDetectedNow = IsMotionDetectedState(currentState);
+        var wasDetectedBefore = IsMotionDetectedState(lastMotionState);
+
+        if (isDetectedNow && !wasDetectedBefore)
+        {
+            motionLiveEvents.Add(details.RequestedAt);
+        }
+
+        lastMotionState = currentState;
+    }
+
+    private async Task LoadMotionDebugAsync(SensorDetailsDto? details)
+    {
+        motionDebug = null;
+
+        if (details is null || details.Type != "motion")
+        {
+            return;
+        }
+
+        try
+        {
+            motionDebug = await ApiClient.GetMotionDebugAsync(details.EntityId, historyHours, 120);
+        }
+        catch
+        {
+            // Keep UI alive even if debug endpoint is temporarily unavailable.
+        }
+    }
+
+    private static bool IsMotionDetectedState(string? state)
+    {
+        if (string.IsNullOrWhiteSpace(state))
+        {
+            return false;
+        }
+
+        return state.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+               state.Equals("detected", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDoorOpenState(string? state)
+    {
+        if (string.IsNullOrWhiteSpace(state))
+        {
+            return false;
+        }
+
+        return state.Equals("on", StringComparison.OrdinalIgnoreCase) ||
+               state.Equals("open", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDoorClosedState(string? state)
+    {
+        if (string.IsNullOrWhiteSpace(state))
+        {
+            return false;
+        }
+
+        return state.Equals("off", StringComparison.OrdinalIgnoreCase) ||
+               state.Equals("closed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task ReloadRoomsAsync()
+    {
+        refreshingRooms = true;
+
+        try
+        {
+            rooms = await ApiClient.GetRoomsAsync();
+            lastRoomsScanAt = DateTime.Now;
+
+            if (selectedDetails is not null)
+            {
+                await RefreshSelectedDetails();
+            }
+        }
+        catch (Exception ex)
+        {
+            detailsError = $"Scan error: {ex.Message}";
+        }
+        finally
+        {
+            refreshingRooms = false;
+        }
+    }
+
+    private void StartRoomsScanLoop()
+    {
+        roomsScanLoopCts = new CancellationTokenSource();
+        roomsScanTimer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (roomsScanTimer is not null &&
+                       await roomsScanTimer.WaitForNextTickAsync(roomsScanLoopCts.Token))
+                {
+                    await InvokeAsync(ReloadRoomsAsync);
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal dispose path
+            }
+        }, roomsScanLoopCts.Token);
+    }
+
+    private sealed record DoorLogEntry(DateTime? OpenedAt, DateTime? ClosedAt);
+    private sealed record ChartPoint(double X, double Y, DateTime Timestamp, double Value, string Tooltip);
+    private sealed record ChartHoverZone(double X, double Width, string Tooltip);
+    private sealed record ChartModel(
+        string Title,
+        string Unit,
+        string Stroke,
+        List<ChartPoint> Points,
+        List<ChartHoverZone> Zones,
+        string Polyline,
+        string CurrentLabel,
+        string MinLabel,
+        string MaxLabel,
+        string StartLabel,
+        string EndLabel);
+}

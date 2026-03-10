@@ -1,0 +1,52 @@
+@inherits LayoutComponentBase
+@inject IJSRuntime Js
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main class="main-shell">
+        <div class="top-row px-4 neo-top-row">
+            <div class="top-row-inner">
+                <div class="neo-top-title">Smart Home Console</div>
+                <button type="button" class="theme-toggle" @onclick="ToggleTheme">
+                    @(_currentTheme == "dark" ? "Light Theme" : "Dark Theme")
+                </button>
+            </div>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui">
+    An unhandled error has occurred.
+    <a href="" class="reload">Reload</a>
+    <a class="dismiss">🗙</a>
+</div>
+
+@code {
+    private string _currentTheme = "light";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _currentTheme = await Js.InvokeAsync<string>("smartPanelTheme.getTheme");
+        await Js.InvokeVoidAsync("smartPanelTheme.applyTheme", _currentTheme);
+        StateHasChanged();
+    }
+
+    private async Task ToggleTheme()
+    {
+        _currentTheme = _currentTheme == "dark" ? "light" : "dark";
+        await Js.InvokeVoidAsync("smartPanelTheme.applyTheme", _currentTheme);
+        await Js.InvokeVoidAsync("smartPanelTheme.saveTheme", _currentTheme);
+    }
+}

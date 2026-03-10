@@ -1,0 +1,796 @@
+@page "/cameras"
+@rendermode InteractiveServer
+@using SmartPanel.Shared
+@inject SmartPanel.Web.Services.SmartHomeApiClient ApiClient
+@inject IJSRuntime JS
+@inject IConfiguration Configuration
+@implements IAsyncDisposable
+
+<PageTitle>Cameras</PageTitle>
+
+<section class="page-shell">
+    <header class="page-header">
+        <div>
+            <h1>Cameras</h1>
+            <p class="page-subtitle">Home Assistant cameras stay intact, and direct LAN cameras can now be discovered over ONVIF, added by IP, streamed in-browser through MediaMTX WebRTC when available, controlled over ONVIF PTZ, patched with manual snapshot or MJPEG URLs, or transcoded from RTSP through local `ffmpeg` as a fallback.</p>
+        </div>
+        <div class="control-row">
+            <button type="button" class="scene-btn" disabled="@loadingPage" @onclick="ReloadAllAsync">Reload</button>
+            <button type="button" class="scene-btn scene-btn-active" disabled="@discovering" @onclick="DiscoverDirectCamerasAsync">Scan ONVIF</button>
+            <button type="button" class="scene-btn" disabled="@resyncingHa" @onclick="ResyncHaAsync">Resync HA</button>
+        </div>
+    </header>
+
+    <div class="analytics-grid camera-admin-grid">
+        <article class="card camera-admin-panel">
+            <div class="section-title-row">
+                <h2>Direct Camera Manager</h2>
+            </div>
+            <p class="page-subtitle">Use discovery or enter an IP like `192.168.1.40`. Credentials are stored protected in the SmartPanel DB. If ONVIF only returns RTSP, SmartPanel prefers local MediaMTX/WebRTC for low-latency playback and can still fall back to local `ffmpeg`; otherwise add a manual snapshot or MJPEG URL override.</p>
+
+            <div class="camera-form-grid">
+                <div class="filter-group">
+                    <label for="camera-name">Name</label>
+                    <input id="camera-name" class="input-control" placeholder="Kitchen PTZ" @bind="directNameInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-host">Host / IP</label>
+                    <input id="camera-host" class="input-control" placeholder="192.168.1.40" @bind="directHostInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-port">Port</label>
+                    <input id="camera-port" type="number" min="1" max="65535" class="input-control" @bind="directPortInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-service-url">Device Service URL</label>
+                    <input id="camera-service-url" class="input-control" placeholder="http://192.168.1.40/onvif/device_service" @bind="deviceServiceUrlInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-username">Username</label>
+                    <input id="camera-username" class="input-control" placeholder="admin" @bind="directUsernameInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-password">Password</label>
+                    <input id="camera-password" type="password" class="input-control" placeholder="@PasswordPlaceholder" @bind="directPasswordInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-profile-token">Preferred Profile Token</label>
+                    @if (AvailableDirectCameraProfiles.Count > 0)
+                    {
+                        <select id="camera-profile-token" class="input-control" @bind="preferredProfileTokenInput">
+                            <option value="">Auto: prefer PTZ-capable profile</option>
+                            @foreach (var profile in AvailableDirectCameraProfiles)
+                            {
+                                <option value="@profile.Token">@FormatProfileOption(profile)</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input id="camera-profile-token" class="input-control" placeholder="Optional" @bind="preferredProfileTokenInput" />
+                    }
+                </div>
+                <div class="filter-group">
+                    <label for="camera-live-profile-token">Preferred Live Profile Token</label>
+                    @if (AvailableDirectCameraProfiles.Count > 0)
+                    {
+                        <select id="camera-live-profile-token" class="input-control" @bind="preferredLiveProfileTokenInput">
+                            <option value="">Auto: prefer low-latency substream</option>
+                            @foreach (var profile in AvailableDirectCameraProfiles)
+                            {
+                                <option value="@profile.Token">@FormatProfileOption(profile)</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <input id="camera-live-profile-token" class="input-control" placeholder="Optional substream token" @bind="preferredLiveProfileTokenInput" />
+                    }
+                </div>
+                <div class="filter-group">
+                    <label for="camera-snapshot-override">Snapshot URL Override</label>
+                    <input id="camera-snapshot-override" class="input-control" placeholder="http://192.168.1.40/tmpfs/auto.jpg" @bind="snapshotUrlOverrideInput" />
+                </div>
+                <div class="filter-group">
+                    <label for="camera-mjpeg-override">MJPEG / Live URL Override</label>
+                    <input id="camera-mjpeg-override" class="input-control" placeholder="http://192.168.1.40:8080/video" @bind="mjpegUrlOverrideInput" />
+                </div>
+                <div class="filter-group checkbox-group">
+                    <label for="camera-tls">Connection</label>
+                    <label class="checkbox-inline" for="camera-tls">
+                        <input id="camera-tls" type="checkbox" @bind="useTls" />
+                        <span>Use HTTPS / ONVIF over TLS</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="control-row">
+                <button type="button" class="scene-btn scene-btn-active" disabled="@savingDirectCamera" @onclick="SaveDirectCameraAsync">
+                    @(editingDirectCameraId is null ? "Add Camera" : "Save Changes")
+                </button>
+                <button type="button" class="scene-btn" disabled="@savingDirectCamera" @onclick="ResetDirectCameraForm">Reset Form</button>
+            </div>
+
+            <div class="sensor-updated">
+                Saved direct cameras: @directCameras.Count
+                @if (!string.IsNullOrWhiteSpace(editingDirectCameraId))
+                {
+                    <span> | Editing: @editingDirectCameraId</span>
+                }
+            </div>
+        </article>
+
+        <article class="card camera-admin-panel">
+            <div class="section-title-row">
+                <h2>Discovered ONVIF Devices</h2>
+            </div>
+            @if (discovering)
+            {
+                <p class="page-subtitle">Scanning local network for `NetworkVideoTransmitter` devices...</p>
+            }
+            else if (discoveredDirectCameras.Count == 0)
+            {
+                <p class="page-subtitle">No discovery results yet. Click `Scan ONVIF` or fill the manual form.</p>
+            }
+            else
+            {
+                <div class="discovery-list">
+                    @foreach (var candidate in discoveredDirectCameras)
+                    {
+                        <div class="discovery-item">
+                            <div class="discovery-head">
+                                <strong>@(string.IsNullOrWhiteSpace(candidate.Name) ? candidate.Host : candidate.Name)</strong>
+                                <span class="sensor-status status-online">Found</span>
+                            </div>
+                            <div class="sensor-updated">@candidate.DeviceServiceUrl</div>
+                            <div class="camera-info compact-info">
+                                <div><strong>Host:</strong> <span class="camera-link">@candidate.Host:@candidate.Port</span></div>
+                                <div><strong>Model:</strong> <span class="camera-link">@Display(candidate.Model)</span></div>
+                                <div><strong>Hardware:</strong> <span class="camera-link">@Display(candidate.Hardware)</span></div>
+                            </div>
+                            <div class="camera-actions">
+                                <button type="button" class="scene-btn" @onclick="@(() => LoadDiscoveryCandidate(candidate))">Use In Form</button>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+    </div>
+
+    @if (SelectedDirectCamera is not null)
+    {
+        <article class="card direct-live-card">
+            <div class="camera-header">
+                <div>
+                    <h2>@SelectedDirectCamera.Name</h2>
+                    <div class="sensor-updated">Direct ONVIF camera | @SelectedDirectCamera.Host:@SelectedDirectCamera.Port | Last seen @SelectedDirectCamera.LastSeenAt.ToString("HH:mm:ss")</div>
+                </div>
+                <span class="sensor-status @(SelectedDirectCamera.Online ? "status-online" : "status-offline")">
+                    @(SelectedDirectCamera.Online ? "Online" : "Offline")
+                </span>
+            </div>
+
+            <div class="direct-live-grid">
+                <div class="camera-preview direct-live-preview">
+                    @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.WebRtcPlayerUrl))
+                    {
+                        <video id="cam-preview" autoplay muted playsinline class="camera-image" style="background:#041225;"></video>
+                    }
+                    else if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.StreamUrl))
+                    {
+                        <img src="@SelectedDirectCamera.StreamUrl" alt="@SelectedDirectCamera.Name" class="camera-image" />
+                    }
+                    else if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.SnapshotUrl))
+                    {
+                        <img src="@WithCacheBuster(SelectedDirectCamera.SnapshotUrl, SelectedDirectCamera.UpdatedAt.Ticks)" alt="@SelectedDirectCamera.Name" class="camera-image" />
+                    }
+                    else
+                    {
+                        <div class="camera-preview-placeholder">No browser live view available. Add a Snapshot or MJPEG override, or install `ffmpeg` for RTSP fallback.</div>
+                    }
+                </div>
+
+                <div class="direct-live-meta">
+                    <div class="detail-grid">
+                        <div class="metric-row"><span>Manufacturer</span><strong>@Display(SelectedDirectCamera.Manufacturer)</strong></div>
+                        <div class="metric-row"><span>Model</span><strong>@Display(SelectedDirectCamera.Model)</strong></div>
+                        <div class="metric-row"><span>Firmware</span><strong>@Display(SelectedDirectCamera.FirmwareVersion)</strong></div>
+                        <div class="metric-row"><span>Control Profile</span><strong>@Display(SelectedDirectCamera.SelectedProfileToken)</strong></div>
+                        <div class="metric-row"><span>Preview Profile</span><strong>@Display(SelectedDirectCamera.LiveProfileToken)</strong></div>
+                    </div>
+
+                    <div class="camera-info compact-info">
+                        <div><strong>Device Service:</strong> <span class="camera-link">@SelectedDirectCamera.DeviceServiceUrl</span></div>
+                        <div><strong>RTSP / Source:</strong> <span class="camera-link">@Display(SelectedDirectCamera.RawStreamUrl)</span></div>
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.WebRtcPlayerUrl))
+                        {
+                            <div><strong>WebRTC Player:</strong> <span class="camera-link">@SelectedDirectCamera.WebRtcPlayerUrl</span></div>
+                            <div><strong>Preview Path:</strong> <span class="camera-link">MediaMTX WebRTC low-latency</span></div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.HlsPlayerUrl))
+                        {
+                            <div><strong>HLS Player:</strong> <span class="camera-link">@SelectedDirectCamera.HlsPlayerUrl</span></div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.PreferredLiveProfileToken))
+                        {
+                            <div><strong>Preferred Live Profile:</strong> <span class="camera-link">@SelectedDirectCamera.PreferredLiveProfileToken</span></div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.SnapshotUrlOverride))
+                        {
+                            <div><strong>Snapshot Override:</strong> <span class="camera-link">@SelectedDirectCamera.SnapshotUrlOverride</span></div>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.MjpegUrlOverride))
+                        {
+                            <div><strong>Live Override:</strong> <span class="camera-link">@SelectedDirectCamera.MjpegUrlOverride</span></div>
+                        }
+                        <div><strong>Capabilities:</strong> <span class="camera-link">@FormatCapabilities(SelectedDirectCamera.Capabilities)</span></div>
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.LastError))
+                        {
+                            <div><strong>Last error:</strong> <span class="camera-link">@SelectedDirectCamera.LastError</span></div>
+                        }
+                    </div>
+
+                    <div class="camera-actions">
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.WebRtcPlayerUrl))
+                        {
+                            <a href="@SelectedDirectCamera.WebRtcPlayerUrl" target="_blank" class="scene-btn camera-link-btn">Open WebRTC</a>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.HlsPlayerUrl))
+                        {
+                            <a href="@SelectedDirectCamera.HlsPlayerUrl" target="_blank" class="scene-btn camera-link-btn">Open HLS</a>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.StreamUrl))
+                        {
+                            <a href="@SelectedDirectCamera.StreamUrl" target="_blank" class="scene-btn camera-link-btn">Open Live</a>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(SelectedDirectCamera.SnapshotUrl))
+                        {
+                            <a href="@SelectedDirectCamera.SnapshotUrl" target="_blank" class="scene-btn camera-link-btn">Open Snapshot</a>
+                        }
+                        <button type="button" class="scene-btn" disabled="@refreshingDirectCamera" @onclick="@(() => RefreshDirectCameraAsync(SelectedDirectCamera.CameraId))">Refresh Camera</button>
+                        <button type="button" class="scene-btn" @onclick="@(() => EditDirectCamera(SelectedDirectCamera))">Edit</button>
+                    </div>
+
+                    @if (HasCapability(SelectedDirectCamera.Capabilities, "ptz"))
+                    {
+                        @BuildPtzMarkup(SelectedDirectCamera.EntityId)
+                    }
+                </div>
+            </div>
+        </article>
+    }
+    else
+    {
+        <div class="card">Select a saved direct camera to open the built-in live player and ONVIF controls.</div>
+    }
+
+    <section class="page-shell">
+        <div class="section-title-row">
+            <h2>Saved Direct Cameras</h2>
+        </div>
+        @if (directCameras.Count == 0)
+        {
+            <div class="card">No direct LAN cameras saved yet.</div>
+        }
+        else
+        {
+            <div class="camera-compact-list">
+                @foreach (var camera in directCameras)
+                {
+                    <div class="camera-compact-item @(camera.CameraId == selectedDirectCameraId ? "camera-card-selected" : string.Empty)">
+                        <div class="camera-compact-info">
+                            <strong>@camera.Name</strong>
+                            <span class="sensor-status @(camera.Online ? "status-online" : "status-offline")">
+                                @(camera.Online ? "Online" : "Offline")
+                            </span>
+                            <span class="sensor-updated">@camera.Host | @Display(camera.Model)</span>
+                        </div>
+                        <div class="camera-compact-actions">
+                            <button type="button" class="scene-btn" @onclick="@(() => SelectDirectCamera(camera.CameraId))">Select</button>
+                            <button type="button" class="scene-btn" @onclick="@(() => EditDirectCamera(camera))">Edit</button>
+                            <button type="button" class="scene-btn" disabled="@refreshingDirectCamera" @onclick="@(() => RefreshDirectCameraAsync(camera.CameraId))">Refresh</button>
+                            <button type="button" class="scene-btn" disabled="@deletingDirectCamera" @onclick="@(() => DeleteDirectCameraAsync(camera.CameraId))">Delete</button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    @* Home Assistant Cameras section disabled
+    <section class="page-shell">
+        <div class="section-title-row">
+            <h2>Home Assistant Cameras</h2>
+        </div>
+        @if (haCameras is null)
+        {
+            <div class="card">Loading Home Assistant cameras...</div>
+        }
+        else if (haCameras.Count == 0)
+        {
+            <div class="card">No Home Assistant cameras were discovered.</div>
+        }
+        else
+        {
+            <div class="cameras-grid">
+                @foreach (var camera in haCameras)
+                {
+                    <article class="camera-card">
+                        <div class="camera-preview">
+                            @if (!string.IsNullOrWhiteSpace(camera.SnapshotUrl))
+                            {
+                                <img src="@camera.SnapshotUrl" alt="@camera.Name" class="camera-image" />
+                            }
+                            else
+                            {
+                                <div class="camera-preview-placeholder">No Snapshot</div>
+                            }
+                        </div>
+
+                        <div class="camera-body">
+                            <div class="camera-header">
+                                <h3>@camera.Name</h3>
+                                <span class="sensor-status @(camera.Online ? "status-online" : "status-offline")">
+                                    @(camera.Online ? "Online" : "Offline")
+                                </span>
+                            </div>
+
+                            <div class="camera-info">
+                                <div><strong>Snapshot:</strong> <span class="camera-link">@camera.SnapshotUrl</span></div>
+                                <div><strong>Stream:</strong> <span class="camera-link">@camera.StreamUrl</span></div>
+                            </div>
+
+                            <div class="camera-actions">
+                                @if (!string.IsNullOrWhiteSpace(camera.SnapshotUrl))
+                                {
+                                    <a href="@camera.SnapshotUrl" target="_blank" class="scene-btn camera-link-btn">Open Snapshot</a>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(camera.StreamUrl))
+                                {
+                                    <a href="@camera.StreamUrl" target="_blank" class="scene-btn camera-link-btn">Open Stream</a>
+                                }
+                                <button type="button" class="scene-btn" @onclick="@(() => RemoveHaCameraAsync(camera.Id))">Remove</button>
+                            </div>
+
+                            <div class="control-row">
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "up")'>Up</button>
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "down")'>Down</button>
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "left")'>Left</button>
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "right")'>Right</button>
+                            </div>
+
+                            <div class="control-row">
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "zoom_in")'>Zoom +</button>
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "zoom_out")'>Zoom -</button>
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "start_recording")'>Record</button>
+                            </div>
+
+                            <div class="control-row">
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "enable_motion_detection")'>Motion On</button>
+                                <button type="button" class="scene-btn" disabled="@sendingCameraCommand" @onclick='() => SendCameraCommandAsync(camera.Id, "disable_motion_detection")'>Motion Off</button>
+                            </div>
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+    End of disabled HA section *@
+
+    @if (!string.IsNullOrWhiteSpace(statusMessage))
+    {
+        <div class="card status-banner">@statusMessage</div>
+    }
+</section>
+
+@code {
+    private List<CameraDto>? haCameras;
+    private List<DirectCameraDto> directCameras = [];
+    private List<DirectCameraDiscoveryDto> discoveredDirectCameras = [];
+    private bool loadingPage = true;
+    private bool discovering;
+    private bool resyncingHa;
+    private bool savingDirectCamera;
+    private bool refreshingDirectCamera;
+    private bool deletingDirectCamera;
+    private bool sendingCameraCommand;
+    private string? statusMessage;
+    private string? editingDirectCameraId;
+    private string? selectedDirectCameraId;
+    private string directNameInput = string.Empty;
+    private string directHostInput = string.Empty;
+    private int directPortInput = 80;
+    private bool useTls;
+    private string deviceServiceUrlInput = string.Empty;
+    private string directUsernameInput = string.Empty;
+    private string directPasswordInput = string.Empty;
+    private string preferredProfileTokenInput = string.Empty;
+    private string preferredLiveProfileTokenInput = string.Empty;
+    private string snapshotUrlOverrideInput = string.Empty;
+    private string mjpegUrlOverrideInput = string.Empty;
+
+    private DirectCameraDto? SelectedDirectCamera =>
+        directCameras.FirstOrDefault(x => x.CameraId == selectedDirectCameraId);
+
+    private DirectCameraDto? EditingDirectCamera =>
+        directCameras.FirstOrDefault(x => x.CameraId == editingDirectCameraId);
+
+    private List<DirectCameraProfileDto> AvailableDirectCameraProfiles =>
+        (EditingDirectCamera?.Profiles?.Count > 0 ? EditingDirectCamera.Profiles : SelectedDirectCamera?.Profiles ?? [])
+        .OrderByDescending(x => x.SupportsPtz)
+        .ThenBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(x => x.Token, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    private string PasswordPlaceholder =>
+        editingDirectCameraId is null ? "Password" : "Leave empty to keep stored password";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAllAsync();
+    }
+
+    private async Task ReloadAllAsync()
+    {
+        loadingPage = true;
+        statusMessage = null;
+
+        try
+        {
+            var haTask = ApiClient.GetCamerasAsync();
+            var directTask = ApiClient.GetDirectCamerasAsync();
+            await Task.WhenAll(haTask, directTask);
+            haCameras = await haTask;
+            directCameras = await directTask;
+            EnsureSelectedDirectCamera();
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Camera reload failed: {ex.Message}";
+        }
+        finally
+        {
+            loadingPage = false;
+        }
+    }
+
+    private async Task RemoveHaCameraAsync(string entityId)
+    {
+        try
+        {
+            await ApiClient.RemoveHaCameraAsync(entityId);
+            haCameras = haCameras?.Where(c => c.Id != entityId).ToList();
+            statusMessage = $"Camera '{entityId}' removed from SmartPanel.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Remove failed: {ex.Message}";
+        }
+    }
+
+    private async Task ResyncHaAsync()
+    {
+        resyncingHa = true;
+        statusMessage = null;
+        try
+        {
+            await ApiClient.ResyncHaCamerasAsync();
+            haCameras = await ApiClient.GetCamerasAsync();
+            statusMessage = "Home Assistant data resynced.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"HA resync failed: {ex.Message}";
+        }
+        finally
+        {
+            resyncingHa = false;
+        }
+    }
+
+    private async Task DiscoverDirectCamerasAsync()
+    {
+        discovering = true;
+        statusMessage = null;
+
+        try
+        {
+            discoveredDirectCameras = await ApiClient.DiscoverDirectCamerasAsync();
+            statusMessage = discoveredDirectCameras.Count == 0
+                ? "No ONVIF devices answered the discovery probe."
+                : $"Discovered {discoveredDirectCameras.Count} ONVIF device(s).";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"ONVIF discovery failed: {ex.Message}";
+        }
+        finally
+        {
+            discovering = false;
+        }
+    }
+
+    private void LoadDiscoveryCandidate(DirectCameraDiscoveryDto candidate)
+    {
+        directNameInput = candidate.Name;
+        directHostInput = candidate.Host;
+        directPortInput = candidate.Port <= 0 ? 80 : candidate.Port;
+        deviceServiceUrlInput = candidate.DeviceServiceUrl;
+        directUsernameInput = string.Empty;
+        directPasswordInput = string.Empty;
+        preferredProfileTokenInput = string.Empty;
+        preferredLiveProfileTokenInput = string.Empty;
+        snapshotUrlOverrideInput = string.Empty;
+        mjpegUrlOverrideInput = string.Empty;
+        useTls = candidate.DeviceServiceUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void SelectDirectCamera(string cameraId)
+    {
+        selectedDirectCameraId = cameraId;
+    }
+
+    private void EditDirectCamera(DirectCameraDto camera)
+    {
+        editingDirectCameraId = camera.CameraId;
+        selectedDirectCameraId = camera.CameraId;
+        directNameInput = camera.Name;
+        directHostInput = camera.Host;
+        directPortInput = camera.Port <= 0 ? 80 : camera.Port;
+        deviceServiceUrlInput = camera.DeviceServiceUrl;
+        directUsernameInput = camera.Username ?? string.Empty;
+        directPasswordInput = string.Empty;
+        preferredProfileTokenInput = camera.SelectedProfileToken ?? string.Empty;
+        preferredLiveProfileTokenInput = camera.PreferredLiveProfileToken ?? string.Empty;
+        snapshotUrlOverrideInput = camera.SnapshotUrlOverride ?? string.Empty;
+        mjpegUrlOverrideInput = camera.MjpegUrlOverride ?? string.Empty;
+        useTls = string.Equals(camera.Scheme, "https", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ResetDirectCameraForm()
+    {
+        editingDirectCameraId = null;
+        directNameInput = string.Empty;
+        directHostInput = string.Empty;
+        directPortInput = 80;
+        deviceServiceUrlInput = string.Empty;
+        directUsernameInput = string.Empty;
+        directPasswordInput = string.Empty;
+        preferredProfileTokenInput = string.Empty;
+        preferredLiveProfileTokenInput = string.Empty;
+        snapshotUrlOverrideInput = string.Empty;
+        mjpegUrlOverrideInput = string.Empty;
+        useTls = false;
+    }
+
+    private async Task SaveDirectCameraAsync()
+    {
+        savingDirectCamera = true;
+        statusMessage = null;
+
+        try
+        {
+            var saved = await ApiClient.SaveDirectCameraAsync(new DirectCameraSaveRequestDto
+            {
+                CameraId = editingDirectCameraId,
+                Name = directNameInput,
+                Host = directHostInput,
+                Port = directPortInput,
+                UseTls = useTls,
+                DeviceServiceUrl = deviceServiceUrlInput,
+                Username = directUsernameInput,
+                Password = directPasswordInput,
+                PreferredProfileToken = preferredProfileTokenInput,
+                PreferredLiveProfileToken = preferredLiveProfileTokenInput,
+                SnapshotUrlOverride = snapshotUrlOverrideInput,
+                MjpegUrlOverride = mjpegUrlOverrideInput
+            });
+
+            await ReloadDirectCamerasAsync(saved?.CameraId);
+            if (saved is not null)
+            {
+                EditDirectCamera(directCameras.First(x => x.CameraId == saved.CameraId));
+            }
+
+            directPasswordInput = string.Empty;
+            statusMessage = saved is null ? "Direct camera save returned no payload." : "Direct camera saved.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Direct camera save failed: {ex.Message}";
+        }
+        finally
+        {
+            savingDirectCamera = false;
+        }
+    }
+
+    private async Task RefreshDirectCameraAsync(string cameraId)
+    {
+        refreshingDirectCamera = true;
+        statusMessage = null;
+
+        try
+        {
+            await ApiClient.RefreshDirectCameraAsync(cameraId);
+            await ReloadDirectCamerasAsync(cameraId);
+            statusMessage = "Direct camera metadata refreshed.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Direct camera refresh failed: {ex.Message}";
+        }
+        finally
+        {
+            refreshingDirectCamera = false;
+        }
+    }
+
+    private async Task DeleteDirectCameraAsync(string cameraId)
+    {
+        deletingDirectCamera = true;
+        statusMessage = null;
+
+        try
+        {
+            await ApiClient.DeleteDirectCameraAsync(cameraId);
+            if (selectedDirectCameraId == cameraId)
+            {
+                selectedDirectCameraId = null;
+            }
+
+            if (editingDirectCameraId == cameraId)
+            {
+                ResetDirectCameraForm();
+            }
+
+            await ReloadDirectCamerasAsync();
+            statusMessage = "Direct camera deleted.";
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Direct camera delete failed: {ex.Message}";
+        }
+        finally
+        {
+            deletingDirectCamera = false;
+        }
+    }
+
+    private async Task ReloadDirectCamerasAsync(string? preferredCameraId = null)
+    {
+        directCameras = await ApiClient.GetDirectCamerasAsync();
+        if (!string.IsNullOrWhiteSpace(preferredCameraId) &&
+            directCameras.Any(x => x.CameraId == preferredCameraId))
+        {
+            selectedDirectCameraId = preferredCameraId;
+        }
+
+        EnsureSelectedDirectCamera();
+    }
+
+    private void EnsureSelectedDirectCamera()
+    {
+        if (directCameras.Count == 0)
+        {
+            selectedDirectCameraId = null;
+            return;
+        }
+
+        if (selectedDirectCameraId is null || directCameras.All(x => x.CameraId != selectedDirectCameraId))
+        {
+            selectedDirectCameraId = directCameras[0].CameraId;
+        }
+    }
+
+    private string ApiBaseUrl => (Configuration["Api:BaseUrl"] ?? "http://localhost:5203/").TrimEnd('/');
+
+    private string? _lastWhepCameraId;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var cam = SelectedDirectCamera;
+        if (cam?.WebRtcPlayerUrl is { Length: > 0 } playerUrl && cam.CameraId != _lastWhepCameraId)
+        {
+            _lastWhepCameraId = cam.CameraId;
+            var whepUrl = playerUrl.TrimEnd('/') + "/whep";
+            var iframeUrl = playerUrl.TrimEnd('/');
+            await JS.InvokeVoidAsync("SmartPanelCameras.startWhep", "cam-preview", whepUrl, iframeUrl);
+        }
+        else if (cam is null && _lastWhepCameraId is not null)
+        {
+            _lastWhepCameraId = null;
+            await JS.InvokeVoidAsync("SmartPanelCameras.stopWhep");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { await JS.InvokeVoidAsync("SmartPanelCameras.stopWhep"); } catch { }
+    }
+
+    private MarkupString BuildPtzMarkup(string entityId)
+    {
+        var api = ApiBaseUrl;
+        return new MarkupString($@"<div class=""climate-panel ptz-panel""
+            onmousedown=""SmartPanelCameras.ptzDown(event,'{api}','{entityId}')""
+            onmouseup=""SmartPanelCameras.ptzUp(event,'{api}','{entityId}')""
+            onmouseleave=""SmartPanelCameras.ptzLeave('{api}','{entityId}')"">
+          <div class=""ptz-dpad"">
+            <button class=""scene-btn ptz-btn ptz-btn-up"" data-ptz=""up"">▲</button>
+            <button class=""scene-btn ptz-btn ptz-btn-left"" data-ptz=""left"">◀</button>
+            <button class=""scene-btn ptz-btn ptz-btn-home"" onclick=""SmartPanelCameras.ptzSend('{api}','{entityId}','home')"">⌂</button>
+            <button class=""scene-btn ptz-btn ptz-btn-right"" data-ptz=""right"">▶</button>
+            <button class=""scene-btn ptz-btn ptz-btn-down"" data-ptz=""down"">▼</button>
+          </div>
+          <div class=""ptz-zoom-row"">
+            <button class=""scene-btn ptz-btn"" data-ptz=""zoom_in"">🔍+</button>
+            <button class=""scene-btn ptz-btn"" data-ptz=""zoom_out"">🔍-</button>
+          </div>
+        </div>");
+    }
+
+    private async Task SendCameraCommandAsync(string entityId, string command)
+    {
+        sendingCameraCommand = true;
+        statusMessage = null;
+
+        try
+        {
+            await ApiClient.ControlCameraAsync(new CameraControlRequestDto
+            {
+                EntityId = entityId,
+                Command = command
+            });
+
+            if (entityId.StartsWith("direct:", StringComparison.OrdinalIgnoreCase))
+            {
+                await ReloadDirectCamerasAsync(selectedDirectCameraId);
+                statusMessage = "Direct camera command sent.";
+            }
+            else
+            {
+                haCameras = await ApiClient.GetCamerasAsync();
+                statusMessage = "Home Assistant camera command sent.";
+            }
+        }
+        catch (Exception ex)
+        {
+            statusMessage = $"Camera control failed: {ex.Message}";
+        }
+        finally
+        {
+            sendingCameraCommand = false;
+        }
+    }
+
+    private static bool HasCapability(IEnumerable<string> capabilities, string capability) =>
+        capabilities.Any(x => x.Equals(capability, StringComparison.OrdinalIgnoreCase));
+
+    private static string Display(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "N/A" : value;
+
+    private static string FormatCapabilities(IEnumerable<string> capabilities)
+    {
+        var values = capabilities.ToList();
+        return values.Count == 0 ? "N/A" : string.Join(", ", values);
+    }
+
+    private static string FormatProfileOption(DirectCameraProfileDto profile)
+    {
+        var name = string.IsNullOrWhiteSpace(profile.Name) ? profile.Token : $"{profile.Name} [{profile.Token}]";
+        return profile.SupportsPtz ? $"{name} | PTZ" : name;
+    }
+
+    private static string WithCacheBuster(string url, long token)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return string.Empty;
+        }
+
+        return $"{url}{(url.Contains('?', StringComparison.Ordinal) ? "&" : "?")}t={token}";
+    }
+
+}
