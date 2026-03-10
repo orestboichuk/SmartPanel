@@ -68,7 +68,7 @@
                     <div class="climate-modes">
                         @foreach (var mode in device.AvailableModes)
                         {
-                            <button class="scene-btn @(device.CurrentMode == mode ? "scene-btn-active" : "")"
+                            <button class="scene-btn @(IsModeActive(device, mode) ? "scene-btn-active" : "")"
                                     disabled="@sending"
                                     @onclick="@(() => SetModeAsync(device.Id, mode))">
                                 @ModeLabel(mode)
@@ -77,9 +77,9 @@
                     </div>
 
                     <div class="control-row" style="margin-top:0.5rem">
-                        <button class="scene-btn scene-btn-active" disabled="@sending"
+                        <button class="@GetPowerButtonClass(device, true)" disabled="@sending"
                                 @onclick="@(() => SetPowerAsync(device.Id, true))">Увімкнути</button>
-                        <button class="scene-btn" disabled="@sending"
+                        <button class="@GetPowerButtonClass(device, false)" disabled="@sending"
                                 @onclick="@(() => SetPowerAsync(device.Id, false))">Вимкнути</button>
                     </div>
                 </article>
@@ -192,6 +192,18 @@
             }
             catch (OperationCanceledException) { }
         }, timerCts.Token);
+    }
+
+    private static bool IsModeActive(ClimateDto device, string mode)
+    {
+        return device.IsOn &&
+               !string.IsNullOrWhiteSpace(device.CurrentMode) &&
+               string.Equals(device.CurrentMode, mode, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetPowerButtonClass(ClimateDto device, bool powerOn)
+    {
+        return device.IsOn == powerOn ? "scene-btn scene-btn-active" : "scene-btn";
     }
 
     private static string ModeLabel(string mode) => mode switch

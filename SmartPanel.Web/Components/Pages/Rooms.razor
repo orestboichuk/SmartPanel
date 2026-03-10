@@ -213,8 +213,8 @@
                                 </div>
 
                                 <div class="control-row" style="margin-top:0.5rem">
-                                    <button type="button" class="scene-btn scene-btn-active" disabled="@sendingClimate" @onclick="SendClimatePowerOn">Power On</button>
-                                    <button type="button" class="scene-btn" disabled="@sendingClimate" @onclick="() => SendClimateCommand(powerOn: false)">Power Off</button>
+                                    <button type="button" class="@GetClimatePowerButtonClass(true)" disabled="@sendingClimate" @onclick="SendClimatePowerOn">Power On</button>
+                                    <button type="button" class="@GetClimatePowerButtonClass(false)" disabled="@sendingClimate" @onclick="() => SendClimateCommand(powerOn: false)">Power Off</button>
                                 </div>
 
                                 @if (!string.IsNullOrWhiteSpace(climateMessage))
@@ -923,8 +923,14 @@
 
     private bool IsModeActive(string mode)
     {
-        return selectedDetails?.CurrentMode is not null &&
+        return IsClimateOn &&
+               selectedDetails?.CurrentMode is not null &&
                selectedDetails.CurrentMode.Equals(mode, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetClimatePowerButtonClass(bool powerOn)
+    {
+        return IsClimateOn == powerOn ? "scene-btn scene-btn-active" : "scene-btn";
     }
 
     private static string FormatClimateModeLabel(string? mode)
